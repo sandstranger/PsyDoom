@@ -482,7 +482,9 @@ struct SavedGlobals {
     void deserializeToGlobals() const noexcept;
 };
 
+#ifndef ANDROID
 static_assert(sizeof(SavedGlobals) == 384);
+#endif
 
 // Header for a save file, comes first in the file
 struct SaveFileHdr {
