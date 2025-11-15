@@ -29,8 +29,9 @@ macro(detect_platform)
 endmacro()
 
 macro(compiler_agnostic_setup)
-    set(CMAKE_C_STANDARD    11)
+    set(CMAKE_C_STANDARD    23)
     set(CMAKE_CXX_STANDARD  17)
+    set(CMAKE_C_STANDARD_REQUIRED ON)
 endmacro()
 
 macro(compiler_specific_setup)

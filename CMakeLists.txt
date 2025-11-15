@@ -1,7 +1,9 @@
 cmake_minimum_required(VERSION 3.13.4)
 project(PsyDoom)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_C_STANDARD    23)
+set(CMAKE_C_STANDARD_REQUIRED ON)
 
 # Current game version string and version info
 set(GAME_VERSION_STR "1.2.0-preview1")
