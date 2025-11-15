@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.13.4)
 project(PsyDoom)
 
+set(CMAKE_CXX_STANDARD 20)
+
 # Current game version string and version info
 set(GAME_VERSION_STR "1.2.0-preview1")
 set(GAME_VERSION_MAJOR 1)
@@ -33,7 +35,6 @@ set(GAME_TGT_NAME                       PsyDoom)
 set(HASH_LIBRARY_TGT_NAME               Hash-Library)
 set(LCD_TOOL_TGT_NAME                   LcdTool)
 set(LIBOGG_TGT_NAME                     LibOgg)
-set(LIBSDL_TGT_NAME                     SDL)
 set(LIBVORBIS_TGT_NAME                  LibVorbis)
 set(LUA_TGT_NAME                        Lua)
 set(PAL_TOOL_TGT_NAME                   PalTool)
@@ -49,6 +50,11 @@ set(VRAM_DUMP_GETRECT_TGT_NAME          VRAMDumpGetRect)
 set(VULKAN_GL_TGT_NAME                  VulkanGL)
 set(WMD_TOOL_TGT_NAME                   WmdTool)
 
+if (NOT ANDROID)
+    set(LIBSDL_TGT_NAME                     SDL)
+else ()
+    set(LIBSDL_TGT_NAME ${SDL2_LIBRARY})
+endif ()
 # Compile in support for the Vulkan renderer?
 set(PSYDOOM_INCLUDE_VULKAN_RENDERER TRUE CACHE BOOL
 "If TRUE (default) then compile in support for the new Vulkan renderer.
@@ -65,9 +71,15 @@ set(PSYDOOM_INCLUDE_GAME TRUE CACHE BOOL
 "If TRUE include the game itself in the project tree.
 Optionally, you could remove the game if you just wanted to compile the audio tools for example.")
 
-set(PSYDOOM_INCLUDE_LAUNCHER TRUE CACHE BOOL 
-"If TRUE then an FLTK based launcher will be built into the PsyDoom executable.
-This launcher allows user configuration and launch parameters to be edited via the its GUI.")
+if (NOT ANDROID)
+    set(PSYDOOM_INCLUDE_LAUNCHER TRUE CACHE BOOL
+    "If TRUE then an FLTK based launcher will be built into the PsyDoom executable.
+    This launcher allows user configuration and launch parameters to be edited via the its GUI.")
+else ()
+    set(PSYDOOM_INCLUDE_LAUNCHER FALSE CACHE BOOL
+            "If TRUE then an FLTK based launcher will be built into the PsyDoom executable.
+    This launcher allows user configuration and launch parameters to be edited via the its GUI.")
+endif ()
 
 set(PSYDOOM_INCLUDE_AUDIO_TOOLS FALSE CACHE BOOL
 "If TRUE include PlayStation Doom audio related tools in the project tree.")

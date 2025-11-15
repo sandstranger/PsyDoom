@@ -559,7 +559,11 @@ else()
 endif()
 
 # Build the executable and setup IDE folders
-add_executable(${GAME_TGT_NAME} ${SOURCE_FILES} ${GENERATED_SOURCE_FILES} ${OTHER_FILES})
+if (NOT ANDROID)
+    add_executable(${GAME_TGT_NAME} ${SOURCE_FILES} ${GENERATED_SOURCE_FILES} ${OTHER_FILES})
+else ()
+    add_library(${GAME_TGT_NAME} SHARED ${SOURCE_FILES} ${GENERATED_SOURCE_FILES} ${OTHER_FILES})
+endif ()
 setup_source_groups("${SOURCE_FILES}" "${OTHER_FILES}")
 
 target_compile_definitions(${GAME_TGT_NAME} PRIVATE
@@ -589,8 +593,7 @@ target_link_libraries(${GAME_TGT_NAME} PRIVATE
     ${LUA_TGT_NAME}
     ${SIMPLE_GPU_TGT_NAME}
     ${SIMPLE_SPU_TGT_NAME}
-    ${SOL2_TGT_NAME}
-)
+    ${SOL2_TGT_NAME})
 
 if (PSYDOOM_INCLUDE_LAUNCHER)
     target_link_libraries(${GAME_TGT_NAME} PRIVATE ${FLTK_TGT_NAME})
