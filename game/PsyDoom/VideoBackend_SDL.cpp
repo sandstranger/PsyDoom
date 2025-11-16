@@ -24,6 +24,14 @@ VideoBackend_SDL::VideoBackend_SDL() noexcept
     , mpFramebufferTexture(nullptr)
     , mpFramebufferPixels(nullptr)
 {
+#ifdef ANDROID
+        bool useLegacyOpenGLES2_0 = strcmp(getenv("LIBGL_ES"), "2") == 0;
+        SDL_Log(useLegacyOpenGLES2_0 ? "Legacy OpenGL ES 2.0 is using for rendering" :
+                "OpenGL ES 3.2 is using for rendering");
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, useLegacyOpenGLES2_0 ? 2 : 3);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, useLegacyOpenGLES2_0 ? 0 : 2);
+#endif
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------

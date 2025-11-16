@@ -79,6 +79,10 @@ static void decideStartupResolution(const uint8_t displayIndex, int32_t& w, int3
         FatalErrors::raise("Failed to determine current screen video mode!");
     }
 
+#ifdef ANDROID
+    w = displayMode.w;
+    h = displayMode.h;
+#else
     // Determine automatically decided resolution
     int32_t autoResolutionW = {};
     int32_t autoResolutionH = {};
@@ -101,10 +105,10 @@ static void decideStartupResolution(const uint8_t displayIndex, int32_t& w, int3
         autoResolutionW = (int32_t)(logicalDispW * scale);
         autoResolutionH = (int32_t)((float) ORIG_DISP_RES_Y * scale);
     }
-
     // Save the actual resolution to use, taking into account user overrides
     w = (Config::gOutputResolutionW > 0) ? Config::gOutputResolutionW : autoResolutionW;
     h = (Config::gOutputResolutionH > 0) ? Config::gOutputResolutionH : autoResolutionH;
+#endif
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
@@ -137,11 +141,15 @@ static Uint32 getSdlWindowCreateFlags() noexcept {
         SDL_WINDOW_ALLOW_HIGHDPI
     );
 
+#ifdef ANDROID
+    windowCreateFlags |= SDL_WINDOW_FULLSCREEN;
+#else
     if (Config::gbFullscreen) {
         windowCreateFlags |= (Config::gbExclusiveFullscreenMode) ? SDL_WINDOW_FULLSCREEN : SDL_WINDOW_FULLSCREEN_DESKTOP;
     } else {
         windowCreateFlags |= SDL_WINDOW_RESIZABLE;
     }
+#endif
 
     windowCreateFlags |= gpVideoBackend->getSdlWindowCreateFlags();
     return windowCreateFlags;
@@ -221,10 +229,20 @@ void initVideo() noexcept {
     decideStartupResolution(displayIndex, winSizeX, winSizeY);
 
     // Linux: create the icon for the window
-    #ifdef __linux__
+    #if __linux__ && !ANDROID
         gpSdlWindowIcon = SDL_CreateRGBSurfaceWithFormatFrom((void*) gIcon_64_raw_rgb888, 64, 64, 24, 64 * 3, SDL_PIXELFORMAT_RGB24);
     #endif
 
+#ifdef ANDROID
+    gpSdlWindow = SDL_CreateWindow(
+            Utils::getGameVersionString(),
+            SDL_WINDOWPOS_UNDEFINED,
+            SDL_WINDOWPOS_UNDEFINED,
+            0,
+            0,
+            getSdlWindowCreateFlags()
+    );
+#else
     // Create the window
     const int32_t windowX = SDL_WINDOWPOS_CENTERED_DISPLAY(displayIndex);
     const int32_t windowY = SDL_WINDOWPOS_CENTERED_DISPLAY(displayIndex);
@@ -237,7 +255,7 @@ void initVideo() noexcept {
         winSizeY,
         getSdlWindowCreateFlags()
     );
-
+#endif
     if (!gpSdlWindow)
         FatalErrors::raise("Unable to create a window!");
 
