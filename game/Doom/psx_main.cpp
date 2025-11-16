@@ -122,3 +122,21 @@ int psx_main(const int argc, const char* const* const argv) noexcept {
         return 0;
     #endif
 }
+
+#ifdef ANDROID
+extern "C"{
+void resumeSound() {
+}
+
+void pauseSound() {
+}
+
+bool needToShowScreenControls() {
+    return true;
+}
+
+bool needToInvokeMouseButtonsEvents(){
+    return false;
+}
+}
+#endif

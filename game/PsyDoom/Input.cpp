@@ -488,9 +488,22 @@ static void handleSdlEvents() noexcept {
 // Initialize input handling
 //------------------------------------------------------------------------------------------------------------------------------------------
 void init() noexcept {
+#ifdef ANDROID
+    SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0");
+#endif
+
     if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) != 0) {
         FatalErrors::raise("Failed to initialize the SDL joystick input subsystem!");
     }
+
+#ifdef ANDROID
+    char *pathToSdl2ControllerDb = getenv("PATH_TO_SDL2_CONTROLLER_DB");
+    if (SDL_GameControllerAddMappingsFromFile(pathToSdl2ControllerDb) < 0) {
+        SDL_Log("Couldn't load mappings: %s\n", SDL_GetError());
+    } else{
+        SDL_Log("Custom controller db was loaded from: %s", pathToSdl2ControllerDb);
+    }
+#endif
 
     SDL_GameControllerEventState(SDL_ENABLE);       // Want game controller events
 
