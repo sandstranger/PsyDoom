@@ -16,6 +16,11 @@
 #include "PsyDoom/Utils.h"
 #include "PsyDoom/Video.h"
 
+#ifdef ANDROID
+#include <unistd.h>
+#include "SDL_system.h"
+#endif
+
 #if PSYDOOM_MODS
     // PsyDoom: a flag set to 'true' if the result of demo playback is unexpected/wrong (when checking demo results).
     // This is used to set the exit code for the application accordingly ('1' if the demo result checks fail, '0' otherwise).
@@ -45,6 +50,10 @@
 //      Doom's own heap would have been corrupted if LIBAPI's heap was in conflicting use of the same memory.
 //------------------------------------------------------------------------------------------------------------------------------------------
 int psx_main(const int argc, const char* const* const argv) noexcept {
+
+#ifdef ANDROID
+    chdir(SDL_AndroidGetExternalStoragePath());
+#endif
     // PsyDoom: setup logic for the new game host environment
     #if PSYDOOM_MODS
         // Parse command line arguments and configuration and initialize input systems
