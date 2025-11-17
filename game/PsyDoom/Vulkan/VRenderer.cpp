@@ -372,13 +372,11 @@ static void recreateSwapImageReadySemaphores() noexcept {
 
 #ifdef ANDROID
 extern "C" {
-void onApplicationPause() {
+void destroyVulkanSwapChain() {
     paused = true;
-    gDevice.waitUntilDeviceIdle();
-    gSwapchain.destroy();
 }
 
-void onApplicationResume() {
+void recreateVulkanSwapChain() {
     needToRecreaseVulkanSurfaces = true;
     paused = false;
 }
@@ -778,11 +776,6 @@ void destroy() noexcept {
 // Alternatively 'isRendering()' can be queried at any time to tell if drawing can take place.
 //------------------------------------------------------------------------------------------------------------------------------------------
 bool beginFrame() noexcept {
-#ifdef ANDROID
-    if (paused){
-        return false;
-    }
-#endif
     // Must have ended the frame or not started one previously
     ASSERT(!gbDidBeginFrame);
     gbDidBeginFrame = true;
