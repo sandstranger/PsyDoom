@@ -83,8 +83,8 @@ void uninstallFatalErrorHandler() noexcept {
 // The Path is returned with a trailing path separator, so can be combined with a file name without any other modifications.
 //------------------------------------------------------------------------------------------------------------------------------------------
 std::string getOrCreateUserDataFolder() noexcept {
+#ifndef ANDROID
     char* const pCfgFilePath = SDL_GetPrefPath(SAVE_FILE_ORG, SAVE_FILE_PRODUCT);
-
     if (!pCfgFilePath) {
         FatalErrors::raise("Unable to create or determine the user data folder (config/save folder) for PsyDoom!");
     }
@@ -92,6 +92,13 @@ std::string getOrCreateUserDataFolder() noexcept {
     std::string path = pCfgFilePath;
     SDL_free(pCfgFilePath);
     return path;
+#else
+    std::string saveFileOrg = SAVE_FILE_ORG;
+    std::string saveFileProduct = SAVE_FILE_PRODUCT;
+    std::string path = SDL_AndroidGetExternalStoragePath();
+    path += "/" + saveFileOrg + "/" + saveFileProduct + "/";
+    return path;
+#endif
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
