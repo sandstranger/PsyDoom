@@ -362,9 +362,10 @@ bool Swapchain::createSwapchain() noexcept {
     ASSERT(mpDevice);
     ASSERT(mpDevice->getWindowSurface());
 
+#ifndef ANDROID
     // Get the Vulkan surface capabilities
     const VkSurfaceCapabilitiesKHR& vkSurfaceCaps = mDeviceSurfaceCaps.getVkSurfaceCapabilities();
-
+#endif
     // Start filling in the create info structure for making the swap chain
     VkSwapchainCreateInfoKHR createInfo = {};
 
@@ -376,7 +377,9 @@ bool Swapchain::createSwapchain() noexcept {
     createInfo.imageExtent = { mSwapExtentW, mSwapExtentH };
     createInfo.imageArrayLayers = 1;
     createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;      // Transfer destination so we can blit
-    createInfo.preTransform =  vkSurfaceCaps.currentTransform;
+#ifndef ANDROID
+    createInfo.preTransform = vkSurfaceCaps.currentTransform;
+#endif
     createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     createInfo.presentMode = mPresentMode;
     createInfo.clipped = VK_TRUE;

@@ -262,7 +262,7 @@ void initVideo() noexcept {
     setOutputDisplayRefreshRate(displayIndex);
 
     // Linux: set the icon for the window
-    #ifdef __linux__
+    #if __linux__ && !ANDROID
         if (gpSdlWindowIcon) {
             SDL_SetWindowIcon(gpSdlWindow, gpSdlWindowIcon);
         }
