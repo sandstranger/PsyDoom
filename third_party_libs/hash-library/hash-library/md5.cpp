@@ -80,6 +80,9 @@ namespace
 #endif
 }
 
+struct AlignedBuffer {
+    alignas(4) uint8_t data[64];
+};
 
 /// process 64 bytes
 void MD5::processBlock(const void* data)
@@ -90,8 +93,10 @@ void MD5::processBlock(const void* data)
   uint32_t c = m_hash[2];
   uint32_t d = m_hash[3];
 
-  // data represented as 16x 32-bit words
-  const uint32_t* words = (uint32_t*) data;
+    alignas(4) uint8_t alignedBuffer[64];
+    memcpy(alignedBuffer, data, 64);
+
+    const uint32_t* words = reinterpret_cast<const uint32_t*>(alignedBuffer);
 
   // computations are little endian, swap data if necessary
 #if defined(__BYTE_ORDER) && (__BYTE_ORDER != 0) && (__BYTE_ORDER == __BIG_ENDIAN)
