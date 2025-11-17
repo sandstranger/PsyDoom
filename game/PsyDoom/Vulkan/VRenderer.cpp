@@ -64,7 +64,12 @@ vgl::VkFuncs gVkFuncs;
 static bool gbCanPsxFbUse16BitColor;
 static bool gbCanVulkanFbUse16BitColor;
 
-// Render paths used
+#ifdef ANDROID
+    static bool paused = false;
+    static bool needToRecreaseVulkanSurfaces = false;
+#endif
+
+    // Render paths used
 VRenderPath_Psx             gRenderPath_Psx;
 VRenderPath_Main            gRenderPath_Main;
 VRenderPath_Crossfade       gRenderPath_Crossfade;
@@ -365,6 +370,20 @@ static void recreateSwapImageReadySemaphores() noexcept {
     }
 }
 
+#ifdef ANDROID
+extern "C" {
+void onApplicationPause() {
+    paused = true;
+    gDevice.waitUntilDeviceIdle();
+    gSwapchain.destroy();
+}
+
+void onApplicationResume() {
+    needToRecreaseVulkanSurfaces = true;
+    paused = false;
+}
+}
+#endif
 //------------------------------------------------------------------------------------------------------------------------------------------
 // Recreates the swapchain and new Vulkan renderer framebuffers if required and returns 'false' if that is not possible to do currently.
 // Recreation might fail validly if the window is currently zero sized for example.
@@ -372,17 +391,33 @@ static void recreateSwapImageReadySemaphores() noexcept {
 // Note: this function also creates the 'swap image ready' semaphores that are used with the swapchain.
 //------------------------------------------------------------------------------------------------------------------------------------------
 static bool ensureValidSwapchainAndFramebuffers() noexcept {
+#ifdef ANDROID
+    if (paused){
+        return false;
+    }
+#endif
     // Sanity checks
     ASSERT(gpCurRenderPath);
 
     // No swapchain or invalid swapchain? If that is the case then try to create or re-create...
     bool bGpuIsIdle = false;
     
+#ifdef ANDROID
+    if ((!gSwapchain.isValid()) || gSwapchain.needsRecreate() || VRenderer::isSwapchainOutOfDate() || needToRecreaseVulkanSurfaces) {
+#else
     if ((!gSwapchain.isValid()) || gSwapchain.needsRecreate() || VRenderer::isSwapchainOutOfDate()) {
+#endif
         // Destroy the old swapchain
         gDevice.waitUntilDeviceIdle();
         bGpuIsIdle = true;
         gSwapchain.destroy();
+
+#ifdef ANDROID
+        if (needToRecreaseVulkanSurfaces){
+            gWindowSurface.recreateSurface();
+            needToRecreaseVulkanSurfaces = false;
+        }
+#endif
 
         // Decide which swap mode to use
         vgl::SwapPresentMode swapMode = {};
@@ -743,6 +778,11 @@ void destroy() noexcept {
 // Alternatively 'isRendering()' can be queried at any time to tell if drawing can take place.
 //------------------------------------------------------------------------------------------------------------------------------------------
 bool beginFrame() noexcept {
+#ifdef ANDROID
+    if (paused){
+        return false;
+    }
+#endif
     // Must have ended the frame or not started one previously
     ASSERT(!gbDidBeginFrame);
     gbDidBeginFrame = true;

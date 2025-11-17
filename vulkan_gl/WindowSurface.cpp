@@ -5,6 +5,8 @@
 #include "InstanceExtensions.h"
 #include "VkFuncs.h"
 #include "VulkanInstance.h"
+#include "SDL_log.h"
+#include "SDL_timer.h"
 
 #include <SDL_vulkan.h>
 
@@ -54,6 +56,30 @@ bool WindowSurface::init(SDL_Window* const pSdlWindow, VulkanInstance& vulkanIns
     }
 
     mbIsValid = true;
+    return true;
+}
+
+bool WindowSurface::recreateSurface() noexcept {
+    if (!mpSdlWindow || !mpVulkanInstance){
+        return false;
+    }
+
+    if (mVkSurface) {
+        ASSERT(mpVulkanInstance);
+        const VkFuncs& vkFuncs = mpVulkanInstance->getVkFuncs();
+        vkFuncs.vkDestroySurfaceKHR(mpVulkanInstance->getVkInstance(), mVkSurface, nullptr);
+        mVkSurface = VK_NULL_HANDLE;
+    }
+
+    if (!SDL_Vulkan_CreateSurface(mpSdlWindow, mpVulkanInstance->getVkInstance(), &mVkSurface)) {
+        ASSERT_FAIL("Failed to create the window surface!");
+        return false;
+    }
+
+    SDL_Log("Vulkan surface recreated successfully");
+
+    SDL_Delay(16);
+
     return true;
 }
 

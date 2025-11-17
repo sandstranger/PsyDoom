@@ -20,6 +20,7 @@ public:
 
     bool init(SDL_Window* const pSdlWindow, VulkanInstance& vulkanInstance) noexcept;
     void destroy(const bool bForceIfInvalid = false) noexcept;
+    bool recreateSurface() noexcept;
 
     inline bool isValid() const noexcept { return mbIsValid; }
     inline SDL_Window* getSdlWindow() const noexcept { return mpSdlWindow; }
