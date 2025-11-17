@@ -242,6 +242,12 @@ static void handleSdlEvents() noexcept {
                         // This makes resizing and such easier in windowed mode.
                         bConsumeEvents = true;
 
+#ifdef ANDROID
+                        SDL_ShowCursor(SDL_DISABLE);
+                        SDL_SetRelativeMouseMode(SDL_TRUE);
+                        SDL_SetWindowGrab(Video::gpSdlWindow, SDL_TRUE);
+                        gbWindowFocusJustLost = false;
+#endif
                         // Tell the game to ignore firing until the fire button is released.
                         // This prevents clicking on the window with a mouse for example triggering firing.
                         gbIgnoreCurrentAttack = true;
