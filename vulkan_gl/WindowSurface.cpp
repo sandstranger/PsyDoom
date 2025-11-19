@@ -78,8 +78,6 @@ bool WindowSurface::recreateSurface() noexcept {
 
     SDL_Log("Vulkan surface recreated successfully");
 
-    SDL_Delay(16);
-
     return true;
 }
 

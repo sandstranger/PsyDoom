@@ -66,6 +66,7 @@ static bool gbCanVulkanFbUse16BitColor;
 
 #ifdef ANDROID
     static bool paused = false;
+    static bool destroySwapChainOnApplicationPause = false;
     static bool needToRecreaseVulkanSurfaces = false;
 #endif
 
@@ -373,12 +374,18 @@ static void recreateSwapImageReadySemaphores() noexcept {
 #ifdef ANDROID
 extern "C" {
 void destroyVulkanSwapChain() {
-    paused = true;
+    if (destroySwapChainOnApplicationPause) {
+        paused = true;
+        gDevice.waitUntilDeviceIdle();
+        gSwapchain.destroy();
+    }
 }
 
 void recreateVulkanSwapChain() {
-    needToRecreaseVulkanSurfaces = true;
-    paused = false;
+    if (destroySwapChainOnApplicationPause) {
+        needToRecreaseVulkanSurfaces = paused;
+        paused = false;
+    }
 }
 }
 #endif
@@ -553,6 +560,9 @@ bool isPhysicalDeviceSuitable(const vgl::PhysicalDevice& device, const vgl::Devi
 // Initializes Vulkan for PsyDoom
 //------------------------------------------------------------------------------------------------------------------------------------------
 void init() noexcept {
+#if ANDROID
+    destroySwapChainOnApplicationPause = true;
+#endif
     // Coord sys info is initially invalid
     updateCoordSysInfo();
 
