@@ -376,8 +376,6 @@ extern "C" {
 void destroyVulkanSwapChain() {
     if (destroySwapChainOnApplicationPause) {
         paused = true;
-        gDevice.waitUntilDeviceIdle();
-        gSwapchain.destroy();
     }
 }
 
