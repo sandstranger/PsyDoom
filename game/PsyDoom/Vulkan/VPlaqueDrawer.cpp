@@ -79,7 +79,7 @@ static void initDescriptorPoolAndSet(vgl::LogicalDevice& device) noexcept {
     gpDescSet_Background_GammaAdjusted = gDescriptorPool.allocDescriptorSet(VPipelines::gDescSetLayout_blit2Tex);
     gpDescSet_Plaque = gDescriptorPool.allocDescriptorSet(VPipelines::gDescSetLayout_blit1Tex);
     gpDescSet_Plaque_GammaAdjusted = gDescriptorPool.allocDescriptorSet(VPipelines::gDescSetLayout_blit2Tex);
-    
+
     const bool bAllDescriptorSetsOK = (
         gpDescSet_Background &&
         gpDescSet_Background_GammaAdjusted &&
@@ -241,7 +241,7 @@ static void transitionBackgroundTexImageLayout() noexcept {
         1,
         &imgBarrier
     );
-    
+
     // Background image layout will now be shader read-only optimal
     gpBackgroundTex->setVkImageLayoutHint(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 }
@@ -260,14 +260,14 @@ void init(vgl::LogicalDevice& device) noexcept {
 void destroy() noexcept {
     gpBackgroundTex = nullptr;
     gPlaqueTex.destroy(true);
-    
+
     const auto freeDescriptorSet = [](vgl::DescriptorSet*& pDescriptorSet) noexcept {
         if (pDescriptorSet) {
             gDescriptorPool.freeDescriptorSet(*pDescriptorSet);
             pDescriptorSet = nullptr;
         }
     };
-    
+
     freeDescriptorSet(gpDescSet_Background);
     freeDescriptorSet(gpDescSet_Background_GammaAdjusted);
     freeDescriptorSet(gpDescSet_Plaque);
@@ -280,110 +280,105 @@ void destroy() noexcept {
 //------------------------------------------------------------------------------------------------------------------------------------------
 // Draws the specified loading plaque texture at the given location on screen (UI coords)
 //------------------------------------------------------------------------------------------------------------------------------------------
-void drawPlaque(texture_t& plaqueTex, const int16_t plaqueX, const int16_t plaqueY, const int16_t clutId) noexcept {
-    // Sanity checks and incrementing the drawn frame count
-    ASSERT(gVertexBuffer.isValid());
-    ASSERT(gpDescSet_Background);
-    ASSERT(gpDescSet_Plaque);
+    void drawPlaque(texture_t &plaqueTex, const int16_t plaqueX, const int16_t plaqueY,
+                    const int16_t clutId) noexcept {
+        ASSERT(gVertexBuffer.isValid());
+        ASSERT(gpDescSet_Background);
+        ASSERT(gpDescSet_Plaque);
 
-    I_IncDrawnFrameCount();
+        I_IncDrawnFrameCount();
 
-    // Make sure the main renderpath has rendered to all its framebuffer images at least once and generate blank frames if not.
-    // They might be destroyed if the view is resized just before drawing a plaque.
-    // We need the framebuffer images to be populated and in the right Vulkan image layout for this effect to work:
-    VRenderPath_Main& mainRenderPath = VRenderer::gRenderPath_Main;
+        VRenderPath_Main &mainRenderPath = VRenderer::gRenderPath_Main;
+        vgl::LogicalDevice &device = VRenderer::gDevice;
 
-    while (!mainRenderPath.didRenderToAllDrawColorAttachments()) {
-        VRenderer::endFrame();
+        while (!mainRenderPath.didRenderToAllDrawColorAttachments()) {
+            if (VRenderer::isRendering()) {
+                VRenderer::endFrame();
+            }
+            VRenderer::setNextRenderPath(mainRenderPath);
+            VRenderer::beginFrame();
+        }
+
+        I_CacheTex(plaqueTex);
+        initPlaqueTex(device, plaqueTex, clutId);
+        determineBackgroundTex(device);
+        ASSERT(gpBackgroundTex);
+
+        populateVertexBuffer(plaqueTex, plaqueX, plaqueY);
+
+        const bool bUsingGammaAdjust = VRenderer::gbUsingGammaAdjustThisFrame;
+        vgl::DescriptorSet &descSet_background = (bUsingGammaAdjust)
+                                                 ? *gpDescSet_Background_GammaAdjusted
+                                                 : *gpDescSet_Background;
+        vgl::DescriptorSet &descSet_plaque = (bUsingGammaAdjust) ? *gpDescSet_Plaque_GammaAdjusted
+                                                                 : *gpDescSet_Plaque;
+
+        descSet_background.bindTextureAndSampler(0, *gpBackgroundTex,
+                                                 VPipelines::gSampler_normClampNearest);
+        descSet_plaque.bindTextureAndSampler(0, gPlaqueTex, VPipelines::gSampler_normClampNearest);
+
+        if (bUsingGammaAdjust) {
+            descSet_background.bindTextureAndSampler(1, VRenderer::gGammaAdjustTex,
+                                                     VPipelines::gSampler_normClampNearest);
+            descSet_plaque.bindTextureAndSampler(1, VRenderer::gGammaAdjustTex,
+                                                 VPipelines::gSampler_normClampNearest);
+        }
+
+        bool bWasRendering = VRenderer::isRendering();
+        bool bShouldPresentPlaque = true;
+
+        if (bWasRendering) {
+            // Skip present if no draw commands were issued yet
+            if ((&VRenderer::getActiveRenderPath() == &VRenderer::gRenderPath_Main) &&
+                (!VDrawing::hasIssuedDrawCmds())) {
+                VRenderer::gbSkipNextFramePresent = true;
+                bShouldPresentPlaque = false;
+            }
+
+            VRenderer::endFrame();
+        }
+
+        if (bShouldPresentPlaque) {
+            VRenderPath_LoadingPlaque &renderPath = VRenderer::gRenderPath_LoadingPlaque;
+            VRenderer::setNextRenderPath(renderPath);
+            renderPath.setPreRenderPassAction(transitionBackgroundTexImageLayout);
+            VRenderer::beginFrame();
+
+            if (VRenderer::isRendering()) {
+                const uint32_t viewportW = VRenderer::gFramebufferW;
+                const uint32_t viewportH = VRenderer::gFramebufferH;
+
+                const VPipelineType_LoadingPlaque pipelineType = (bUsingGammaAdjust) ?
+                                                                 VPipelineType_LoadingPlaque::LoadingPlaqueGammaAdjusted
+                                                                                     :
+                                                                 VPipelineType_LoadingPlaque::LoadingPlaque;
+
+                const vgl::Pipeline &pipeline = VPipelines::gPipelines_LoadingPlaque.get(
+                        pipelineType);
+
+                vgl::CmdBufferRecorder &cmdRec = VRenderer::gCmdBufferRec;
+                cmdRec.setViewport(0.0f, 0.0f, (float) viewportW, (float) viewportH, 0.0f, 1.0f);
+                cmdRec.setScissors(0, 0, viewportW, viewportH);
+                cmdRec.bindVertexBuffer(gVertexBuffer, 0, 0);
+                cmdRec.bindPipeline(pipeline);
+
+                cmdRec.bindDescriptorSet(descSet_background, pipeline, 0);
+                cmdRec.draw(6, 0);
+
+                cmdRec.bindDescriptorSet(descSet_plaque, pipeline, 0);
+                cmdRec.draw(12, 6);
+
+                VRenderer::endFrame();
+            }
+        }
+
+        device.waitUntilDeviceIdle();
+
+        gPlaqueTex.destroy(false);
+
         VRenderer::setNextRenderPath(mainRenderPath);
         VRenderer::beginFrame();
     }
-
-    // Make sure the plaque texture is cached to VRAM firstly and populate the loading plaque texture.
-    // Also decide which previous framebuffer texture to use for the background.
-    vgl::LogicalDevice& device = VRenderer::gDevice;
-
-    I_CacheTex(plaqueTex);
-    initPlaqueTex(device, plaqueTex, clutId);
-
-    determineBackgroundTex(device);
-    ASSERT(gpBackgroundTex);
-
-    // Populate the vertex buffer with the vertices to use and bind the background & plaque textures to their descriptor sets
-    populateVertexBuffer(plaqueTex, plaqueX, plaqueY);
-    
-    const bool bUsingGammaAdjust = VRenderer::gbUsingGammaAdjustThisFrame;
-    vgl::DescriptorSet& descSet_background = (bUsingGammaAdjust) ? *gpDescSet_Background_GammaAdjusted : *gpDescSet_Background;
-    vgl::DescriptorSet& descSet_plaque = (bUsingGammaAdjust) ? *gpDescSet_Plaque_GammaAdjusted : *gpDescSet_Plaque;
-    
-    descSet_background.bindTextureAndSampler(0, *gpBackgroundTex, VPipelines::gSampler_normClampNearest);
-    descSet_plaque.bindTextureAndSampler(0, gPlaqueTex, VPipelines::gSampler_normClampNearest);
-    
-    if (bUsingGammaAdjust) {
-        descSet_background.bindTextureAndSampler(1, VRenderer::gGammaAdjustTex, VPipelines::gSampler_normClampNearest);
-        descSet_plaque.bindTextureAndSampler(1, VRenderer::gGammaAdjustTex, VPipelines::gSampler_normClampNearest);
-    }
-
-    // Only issue drawing commands if we can actually render
-    if (VRenderer::isRendering()) {
-        // Fix for a single black/empty frame showing when the plaque is initially displayed.
-        // If no draw commands have yet been issued for the current frame (happens due to when this function is invoked), then skip presenting the frame.
-        // Note that we can only do this check for the main render path, since that is what uses the 'VDrawing' module.
-        if ((&VRenderer::getActiveRenderPath() == &VRenderer::gRenderPath_Main) && (!VDrawing::hasIssuedDrawCmds())) {
-            VRenderer::gbSkipNextFramePresent = true;
-        }
-
-        // End the current frame - in whatever render path is being used
-        VRenderer::endFrame();
-
-        // Begin the next frame and switch to the loading plaque render path.
-        // Prior to beginning a render pass for the new frame, do image layout transitions to get the background texture into the right layout.
-        VRenderPath_LoadingPlaque& renderPath = VRenderer::gRenderPath_LoadingPlaque;
-        VRenderer::setNextRenderPath(renderPath);
-        renderPath.setPreRenderPassAction(transitionBackgroundTexImageLayout);
-        VRenderer::beginFrame();
-        
-        // Are we actually rendering?
-        if (VRenderer::isRendering()) {
-            // What size is the view being rendered to?
-            const uint32_t viewportW = VRenderer::gFramebufferW;
-            const uint32_t viewportH = VRenderer::gFramebufferH;
-
-            // Setup the viewport, bind the vertex buffer and pipeline used
-            const VPipelineType_LoadingPlaque pipelineType = (bUsingGammaAdjust) ?
-                VPipelineType_LoadingPlaque::LoadingPlaqueGammaAdjusted :
-                VPipelineType_LoadingPlaque::LoadingPlaque;
-            
-            const vgl::Pipeline& pipeline = VPipelines::gPipelines_LoadingPlaque.get(pipelineType);
-
-            vgl::CmdBufferRecorder& cmdRec = VRenderer::gCmdBufferRec;
-            cmdRec.setViewport(0.0f, 0.0f, (float) viewportW, (float) viewportH, 0.0f, 1.0f);
-            cmdRec.setScissors(0, 0, viewportW, viewportH);
-            cmdRec.bindVertexBuffer(gVertexBuffer, 0, 0);
-            cmdRec.bindPipeline(pipeline);
-
-            // Draw the background
-            cmdRec.bindDescriptorSet(descSet_background, pipeline, 0);
-            cmdRec.draw(6, 0);
-
-            // Draw the plaque
-            cmdRec.bindDescriptorSet(descSet_plaque, pipeline, 0);
-            cmdRec.draw(12, 6);
-        }
-    }
-
-    // Cleanup when we are done by destroying the plaque tex later
-    gPlaqueTex.destroy(false);
-
-    // End the frame and wait for all drawing to end.
-    // We have to do this to avoid external code overwriting the background framebuffer before we are done using it.
-    VRenderer::endFrame();
-    device.waitUntilDeviceIdle();
-
-    // Go back to doing normal rendering
-    VRenderer::setNextRenderPath(mainRenderPath);
-    VRenderer::beginFrame();
-}
 
 END_NAMESPACE(VPlaqueDrawer)
 

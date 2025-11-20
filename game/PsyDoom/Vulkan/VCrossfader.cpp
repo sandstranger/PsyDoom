@@ -212,70 +212,73 @@ void doPreCrossfadeSetup() noexcept {
 //------------------------------------------------------------------------------------------------------------------------------------------
 // Does a crossfade for the specified duration given in original PSX vblanks
 //------------------------------------------------------------------------------------------------------------------------------------------
-void doCrossfade(const int32_t vblanksDuration) noexcept {
-    // Get the device to crossfade with
-    ASSERT(gScreenQuad.isValid());
-    vgl::LogicalDevice& device = *gDescriptorPool.getDevice();
+    void doCrossfade(const int32_t vblanksDuration) noexcept {
+        // Get the device to crossfade with
+        ASSERT(gScreenQuad.isValid());
+        vgl::LogicalDevice& device = *gDescriptorPool.getDevice();
 
-    // Prior to this being called the renderer should already be put into the crossfade render path, and crossfade textures determined
-    ASSERT(&VRenderer::getActiveRenderPath() == &VRenderer::gRenderPath_Crossfade);
-    ASSERT(gpCrossfadeTex1);
-    ASSERT(gpCrossfadeTex2);
+        // Prior to this being called the renderer should already be put into the crossfade render path, and crossfade textures determined
+        ASSERT(&VRenderer::getActiveRenderPath() == &VRenderer::gRenderPath_Crossfade);
+        ASSERT(gpCrossfadeTex1);
+        ASSERT(gpCrossfadeTex2);
 
-    // Sample the begin time (in vblanks) for the crossfade
-    const int32_t fadeBeginTimeVbl = I_GetTotalVBlanks();
-    float percentComplete = 0.0f;
+        // Sample the begin time (in vblanks) for the crossfade
+        const int32_t fadeBeginTimeVbl = I_GetTotalVBlanks();
+        float percentComplete = 0.0f;
 
-    // Continue fading until enough time has elapsed
-    bool bDidBindCrossfadeTextures = false;
+        // Continue fading until enough time has elapsed
+        bool bDidBindCrossfadeTextures = false;
+        bool bShouldContinueRendering = true;
 
-    while (true) {
-        // Draw a fade frame if rendering and bind the crossfade textures to the descriptor set if required
-        I_IncDrawnFrameCount();
+        while (bShouldContinueRendering) {
+            // Draw a fade frame if rendering and bind the crossfade textures to the descriptor set if required
+            I_IncDrawnFrameCount();
 
-        if (VRenderer::isRendering()) {
-            if (!bDidBindCrossfadeTextures) {
-                bindCrossfadeTextures();
-                bDidBindCrossfadeTextures = true;
+            if (VRenderer::isRendering()) {
+                if (!bDidBindCrossfadeTextures) {
+                    bindCrossfadeTextures();
+                    bDidBindCrossfadeTextures = true;
+                }
+
+                drawCrossfadeFrame(percentComplete);
             }
 
-            drawCrossfadeFrame(percentComplete);
+            // Is it time to end the fade?
+            const int32_t nowTimeVbl = I_GetTotalVBlanks();
+            const int32_t elapsedVbl = nowTimeVbl - fadeBeginTimeVbl;
+
+            if ((elapsedVbl >= vblanksDuration) || Input::isQuitRequested()) {
+                bShouldContinueRendering = false;
+            } else {
+                // Update the percent complete
+                percentComplete = (float) elapsedVbl / (float) vblanksDuration;
+
+                // Only end the frame if we're continuing
+                if (VRenderer::isRendering()) {
+                    VRenderer::endFrame();
+                }
+
+                Utils::doPlatformUpdates();
+                Utils::threadYield();
+
+                // Begin the next frame only if we're continuing
+                if (bShouldContinueRendering) {
+                    VRenderer::beginFrame();
+                }
+            }
         }
 
-        // Is it time to end the fade?
-        const int32_t nowTimeVbl = I_GetTotalVBlanks();
-        const int32_t elapsedVbl = nowTimeVbl - fadeBeginTimeVbl;
+        if (VRenderer::isRendering()) {
+            VRenderer::endFrame();
+        }
 
-        if ((elapsedVbl >= vblanksDuration) || Input::isQuitRequested())
-            break;
-
-        // Update the percent complete and end the frame
-        percentComplete = (float) elapsedVbl / (float) vblanksDuration;
-        VRenderer::endFrame();
-        
-        // Do platform updates (window message pump etc.) and yield some CPU time in case vsync is not capping us.
-        //
-        // Note: intentionally doing this AFTER 'endFrame()' and before 'beginFrame()' so that the rug is not pulled out from
-        // under us and the window resized while we are rendering, which can lead to all sorts of errors on macOS/Metal.
-        Utils::doPlatformUpdates();
-        Utils::threadYield();
-        
-        // Begin the next frame
+        device.waitUntilDeviceIdle();
+        VRenderer::setNextRenderPath(VRenderer::gRenderPath_Main);
         VRenderer::beginFrame();
+
+        // Clear these out for good measure
+        VRenderer::gRenderPath_Crossfade.setOldFramebufferTextures(nullptr, nullptr);
     }
-
-    // Return back to the main render path after doing the crossfade and wait for all drawing to end.
-    // We have to do this in case the framebuffers need to be resized after the crossfade is done, so the crossfade needs to be done with them at this point.
-    VRenderer::setNextRenderPath(VRenderer::gRenderPath_Main);
-    VRenderer::endFrame();
-    device.waitUntilDeviceIdle();
-
-    // Go back to doing normal rendering
-    VRenderer::beginFrame();
-
-    // Clear these out for good measure
-    VRenderer::gRenderPath_Crossfade.setOldFramebufferTextures(nullptr, nullptr);
-}
 
 END_NAMESPACE(VCrossfader)
 
