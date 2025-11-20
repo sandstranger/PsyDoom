@@ -109,22 +109,13 @@ Fence& RingbufferMgr::getCurrentBufferFence() noexcept {
 //------------------------------------------------------------------------------------------------------------------------------------------
 uint8_t RingbufferMgr::acquireNextBuffer() noexcept {
     ASSERT(mbIsValid);
-
-    // Wait for the fence for the next buffer to become signalled
-    const uint8_t nextBufferIdx = (mBufferIndex + 1) % Defines::RINGBUFFER_SIZE;
-    Fence& nextRingbufferFence = mFences[nextBufferIdx];
-    nextRingbufferFence.waitUntilSignalled();
-
-    // Cleanup all resources that we can for this ringbuffer index
-    doCleanupForBufferIndex(nextBufferIdx);
-
-    // Reset the fence for this ringbuffer slot.
-    // It will be signalled again once all operations have completed for this ringbuffer slot:
-    nextRingbufferFence.resetSignal();
-
-    // Move onto the next ringbuffer slot
-    mBufferIndex = nextBufferIdx;
-    return nextBufferIdx;
+    const uint8_t currentBufferIdx = mBufferIndex;
+    Fence& currentFence = mFences[currentBufferIdx];
+    currentFence.waitUntilSignalled();
+    currentFence.resetSignal();
+    doCleanupForBufferIndex(currentBufferIdx);
+    mBufferIndex = (currentBufferIdx + 1) % Defines::RINGBUFFER_SIZE;
+    return mBufferIndex;
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
