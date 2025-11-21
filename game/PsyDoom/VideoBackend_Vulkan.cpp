@@ -131,7 +131,10 @@ void VideoBackend_Vulkan::beginExternalSurfaceDisplay() noexcept {
     // Finish up the current frame that was automatically started and remember the render path used.
     // Frames will be submitted manually via 'displayExternalSurface()' from here on in:
     mpDispExtSurfOldRenderPath = &VRenderer::getActiveRenderPath();
-    VRenderer::endFrame();
+    if (VRenderer::isRendering()) {
+        VRenderer::endFrame();
+        VRenderer::gDevice.waitUntilDeviceIdle();
+    }
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
@@ -146,6 +149,7 @@ void VideoBackend_Vulkan::endExternalSurfaceDisplay() noexcept {
     }
 
     VRenderer::beginFrame();
+    VRenderer::gDevice.waitUntilDeviceIdle();
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
@@ -167,6 +171,11 @@ void VideoBackend_Vulkan::displayExternalSurface(
     // This will always be the case if 'beginExternalSurfaceDisplay()' is called prior to calling this function for a series of frames.
     VRenderer::setNextRenderPath(VRenderer::gRenderPath_Blit);
     const bool bCanDraw = VRenderer::beginFrame();
+
+    if (!bCanDraw) {
+        VRenderer::gDevice.waitUntilDeviceIdle();
+        return;
+    }
 
     // Get the size of the area we can blit to and clip the desintation rectangle to that area
     const vgl::Texture& srcTexture = vulkanSurface.getTexture();
