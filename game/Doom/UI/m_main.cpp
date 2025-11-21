@@ -418,8 +418,12 @@ gameaction_t RunMenu() noexcept {
         #endif
 
         #if PSYDOOM_MODS
-            if ((menuResult == ga_timeout) || (menuResult == ga_quitapp))
-                return menuResult;
+            #ifndef ANDROID
+                if ((menuResult == ga_timeout) || (menuResult == ga_quitapp))
+            #else
+                if (menuResult == ga_quitapp)
+            #endif
+                    return menuResult;
         #else
             if (menuResult == ga_timeout)
                 return menuResult;
@@ -714,9 +718,11 @@ gameaction_t M_Ticker() noexcept {
         gMenuTimeoutStartTicCon = gTicCon;
     }
 
+#ifndef ANDROID
     // Exit the menu if timed out
     if (gTicCon - gMenuTimeoutStartTicCon >= 1800)
         return ga_timeout;
+#endif
 
     // Animate the skull cursor
     if ((gGameTic > gPrevGameTic) && ((gGameTic & 3) == 0)) {
