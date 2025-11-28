@@ -379,6 +379,8 @@ bool Swapchain::createSwapchain() noexcept {
     createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;      // Transfer destination so we can blit
 #ifndef ANDROID
     createInfo.preTransform = vkSurfaceCaps.currentTransform;
+#else
+    createInfo.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
 #endif
     createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     createInfo.presentMode = mPresentMode;
