@@ -498,7 +498,7 @@ void init() noexcept {
     SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0");
 #endif
 
-    if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) != 0) {
+    if (SDL_InitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) != 0) {
         FatalErrors::raise("Failed to initialize the SDL joystick input subsystem!");
     }
 
@@ -590,7 +590,7 @@ void shutdown() noexcept {
     gpKeyboardState = nullptr;
     gbIsQuitRequested = false;
 
-    SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER);
+    SDL_QuitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER);
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
