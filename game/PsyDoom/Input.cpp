@@ -165,6 +165,7 @@ static void closeCurrentGameController() noexcept {
 static void rescanGameControllers() noexcept {
     // If we already have a gamepad or generic joystick then just re-check that it is still connected.
     // Note that we can check if a gamepad is connected by checking if the associated joystick is connected.
+
     if (gpJoystick) {
         if (!SDL_JoystickGetAttached(gpJoystick)) {
             closeCurrentGameController();
@@ -198,6 +199,14 @@ static void rescanGameControllers() noexcept {
         }
     }
 }
+
+#if ANDROID
+extern "C"{
+void RegisterJoysticks() {
+    rescanGameControllers();
+}
+}
+#endif
 
 //------------------------------------------------------------------------------------------------------------------------------------------
 // Update the status for the specified joystick hat and generate events if required
