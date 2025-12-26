@@ -178,7 +178,26 @@ static void rescanGameControllers() noexcept {
     // Note: a return of < 0 means an error, which we will ignore:
     const int numJoysticks = SDL_NumJoysticks();
 
+    const char* virtualControllerName = "Xbox Series X Controller";
+    const int virtualBallsCount = 1;
+    int virtualControllerIndex = -1;
+
+    for (int i = 0; i < numJoysticks; i++) {
+        SDL_Joystick *js = SDL_JoystickOpen(i);
+        const char* joystickName = SDL_JoystickName(js);
+        const int ballsCount =  SDL_JoystickNumBalls(js);
+        SDL_JoystickClose(js);
+
+        if (virtualBallsCount == ballsCount && joystickName && strcmp(joystickName, virtualControllerName) == 0){
+            virtualControllerIndex = i;
+            break;
+        }
+     }
+
     for (int joyIdx = 0; joyIdx < numJoysticks; ++joyIdx) {
+        if (virtualControllerIndex!=-1 && joyIdx!=virtualControllerIndex){
+            continue;
+        }
         // If we find a valid game controller or generic joystick then try to open it.
         // If we succeed then our work is done!
         if (SDL_IsGameController(joyIdx)) {
