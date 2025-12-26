@@ -157,6 +157,10 @@ static void closeCurrentGameController() noexcept {
     gJoystickId = {};
 }
 
+#if ANDROID
+char *virtualControllerGUID = nullptr;
+#endif
+
 //------------------------------------------------------------------------------------------------------------------------------------------
 // Rescans for SDL game controllers and generic joysticks to use: just uses the first available controller or joystick.
 // This may choose wrong in a multi-gamepad/joystick situation but the user can always disconnect one to clarify which one is wanted.
@@ -178,21 +182,27 @@ static void rescanGameControllers() noexcept {
     // Note: a return of < 0 means an error, which we will ignore:
     const int numJoysticks = SDL_NumJoysticks();
 
-    const char* virtualControllerName = "Xbox Series X Controller";
-    const int virtualBallsCount = 1;
     int virtualControllerIndex = -1;
 
-    for (int i = 0; i < numJoysticks; i++) {
-        SDL_Joystick *js = SDL_JoystickOpen(i);
-        const char* joystickName = SDL_JoystickName(js);
-        const int ballsCount =  SDL_JoystickNumBalls(js);
-        SDL_JoystickClose(js);
 
-        if (virtualBallsCount == ballsCount && joystickName && strcmp(joystickName, virtualControllerName) == 0){
-            virtualControllerIndex = i;
-            break;
+#if ANDROID
+        if (virtualControllerGUID!= nullptr) {
+            for (int i = 0; i < numJoysticks; i++) {
+                SDL_Joystick *js = SDL_JoystickOpen(i);
+                if (js != nullptr) {
+                    const SDL_JoystickGUID guid = SDL_JoystickGetGUID(js);
+                    char guid_str[33];
+                    SDL_JoystickGetGUIDString(guid, guid_str, sizeof(guid_str));
+                    SDL_JoystickClose(js);
+
+                    if (strcmp(guid_str, virtualControllerGUID) == 0) {
+                        virtualControllerIndex = i;
+                        break;
+                    }
+                }
+            }
         }
-     }
+#endif
 
     for (int joyIdx = 0; joyIdx < numJoysticks; ++joyIdx) {
         if (virtualControllerIndex!=-1 && joyIdx!=virtualControllerIndex){
@@ -223,7 +233,10 @@ static void rescanGameControllers() noexcept {
 
 #if ANDROID
 extern "C"{
-void rescanGameControllersForced() {
+void rescanGameControllersForced(char *targetVirtualControllerGUID){
+    if (targetVirtualControllerGUID!= nullptr && strlen(targetVirtualControllerGUID) > 0 && virtualControllerGUID== nullptr){
+        virtualControllerGUID = strdup(targetVirtualControllerGUID);
+    }
     rescanGameControllers();
 }
 }
