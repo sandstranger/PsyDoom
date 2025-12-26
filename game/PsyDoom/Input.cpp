@@ -163,6 +163,8 @@ static void closeCurrentGameController() noexcept {
 // Most computer users would probably only want one gamepad or joystick connected at a time anyway?
 //------------------------------------------------------------------------------------------------------------------------------------------
 static void rescanGameControllers() noexcept {
+    SDL_GameControllerUpdate();
+
     // If we already have a gamepad or generic joystick then just re-check that it is still connected.
     // Note that we can check if a gamepad is connected by checking if the associated joystick is connected.
 
@@ -202,7 +204,7 @@ static void rescanGameControllers() noexcept {
 
 #if ANDROID
 extern "C"{
-void RegisterJoysticks() {
+void rescanGameControllersForced() {
     rescanGameControllers();
 }
 }
@@ -505,6 +507,21 @@ static void handleSdlEvents() noexcept {
 void init() noexcept {
 #ifdef ANDROID
     SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0");
+    SDL_SetHint(SDL_HINT_JOYSTICK_RAWINPUT, "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_RAWINPUT_CORRELATE_XINPUT, "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS3, "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_STEAMDECK, "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_WII, "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_COMBINE_JOY_CONS, "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI, "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS4, "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_SWITCH, "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_JOY_CONS, "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS4_RUMBLE, "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS5_RUMBLE, "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_STEAM, "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_GAMECUBE, "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS5, "1");
 #endif
 
     if (SDL_InitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) != 0) {
