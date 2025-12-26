@@ -157,10 +157,6 @@ static void closeCurrentGameController() noexcept {
     gJoystickId = {};
 }
 
-#if ANDROID
-char *virtualControllerGUID = nullptr;
-#endif
-
 //------------------------------------------------------------------------------------------------------------------------------------------
 // Rescans for SDL game controllers and generic joysticks to use: just uses the first available controller or joystick.
 // This may choose wrong in a multi-gamepad/joystick situation but the user can always disconnect one to clarify which one is wanted.
@@ -183,23 +179,12 @@ static void rescanGameControllers() noexcept {
     const int numJoysticks = SDL_NumJoysticks();
 
     int virtualControllerIndex = -1;
-
-
+    
 #if ANDROID
-        if (virtualControllerGUID!= nullptr) {
-            for (int i = 0; i < numJoysticks; i++) {
-                SDL_Joystick *js = SDL_JoystickOpen(i);
-                if (js != nullptr) {
-                    const SDL_JoystickGUID guid = SDL_JoystickGetGUID(js);
-                    char guid_str[33];
-                    SDL_JoystickGetGUIDString(guid, guid_str, sizeof(guid_str));
-                    SDL_JoystickClose(js);
-
-                    if (strcmp(guid_str, virtualControllerGUID) == 0) {
-                        virtualControllerIndex = i;
-                        break;
-                    }
-                }
+        for (int i = 0; i < numJoysticks; i++) {
+            if(SDL_JoystickIsVirtual(i)){
+                virtualControllerIndex = i;
+                break;
             }
         }
 #endif
@@ -233,10 +218,7 @@ static void rescanGameControllers() noexcept {
 
 #if ANDROID
 extern "C"{
-void rescanGameControllersForced(char *targetVirtualControllerGUID){
-    if (targetVirtualControllerGUID!= nullptr && strlen(targetVirtualControllerGUID) > 0 && virtualControllerGUID== nullptr){
-        virtualControllerGUID = strdup(targetVirtualControllerGUID);
-    }
+void rescanGameControllersForced(){
     rescanGameControllers();
 }
 }
