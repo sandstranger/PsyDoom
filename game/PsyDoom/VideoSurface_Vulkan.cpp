@@ -23,7 +23,7 @@ VideoSurface_Vulkan::VideoSurface_Vulkan(vgl::LogicalDevice& device, const uint3
 {
     ASSERT((width > 0) && (height > 0));
 
-    if (!mTexture.initAs2dTexture(device, VK_FORMAT_A8B8G8R8_UNORM_PACK32, width, height, true)) {  // N.B: 'true' for copyable!
+    if (!mTexture.initAs2dTexture(device, VK_FORMAT_B8G8R8A8_UNORM, width, height, true)) {  // N.B: 'true' for copyable!
         ASSERT_FAIL("VideoSurface_Vulkan::VideoSurface_Vulkan: initializing the texture failed!");
     }
 }

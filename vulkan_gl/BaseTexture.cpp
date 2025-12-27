@@ -39,8 +39,8 @@ BaseTexture::BaseTexture() noexcept
 BaseTexture::BaseTexture(BaseTexture&& other) noexcept
     : mbIsValid(other.mbIsValid)
     , mFormat(other.mFormat)
-    , mWidth(other.mWidth)
-    , mHeight(other.mHeight)
+    , mWidth(other.mWidth <16 ? 16 : other.mWidth)
+    , mHeight(other.mHeight < 16 ? 16 : other.mHeight)
     , mDepth(other.mDepth)
     , mNumLayers(other.mNumLayers)
     , mNumMipLevels(other.mNumMipLevels)
@@ -177,10 +177,11 @@ bool BaseTexture::initInternal(
         }
     });
 
+
     // Save for future reference
     mFormat = textureFormat;
-    mWidth = width;
-    mHeight = height;
+    mWidth = width < 16 ? 16 : width;
+    mHeight = height < 16 ? 16 : height;
     mDepth = depth;
     mNumLayers = numLayers;
     mNumMipLevels = numMipLevels;

@@ -45,13 +45,13 @@ bool MutableTexture::initAs1dTexture(
         device,
         VK_IMAGE_TYPE_1D,
         VK_IMAGE_VIEW_TYPE_MAX_ENUM,                                        // Don't create an image view! Mutable textures can't be sampled.
-        VK_IMAGE_TILING_LINEAR,                                             // Straight image storage - no fancy stuff
+        VK_IMAGE_TILING_OPTIMAL,                                             // Straight image storage - no fancy stuff
         VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,  // Mutable textures are only for transferring to/from and storage
-        VK_IMAGE_LAYOUT_PREINITIALIZED,                                     // Any mem contents from here on in must be preserved
-        DeviceMemAllocMode::REQUIRE_HOST_VISIBLE,                           // Must be in RAM
+        VK_IMAGE_LAYOUT_UNDEFINED,                                     // Any mem contents from here on in must be preserved
+        DeviceMemAllocMode::PREFER_DEVICE_LOCAL,                           // Must be in RAM
         textureFormat,
-        width,
-        1,              // Height
+        width < 16 ? 16 : width,
+        16,              // Height
         1,              // Depth
         numLayers,
         numMipLevels,
@@ -78,10 +78,10 @@ bool MutableTexture::initAs2dTexture(
         device,
         VK_IMAGE_TYPE_2D,
         VK_IMAGE_VIEW_TYPE_MAX_ENUM,                                        // Don't create an image view! Mutable textures can't be sampled.
-        VK_IMAGE_TILING_LINEAR,                                             // Straight image storage - no fancy stuff
+        VK_IMAGE_TILING_OPTIMAL,                                             // Straight image storage - no fancy stuff
         VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,  // Mutable textures are only for transferring to/from and storage
-        VK_IMAGE_LAYOUT_PREINITIALIZED,                                     // Any mem contents from here on in must be preserved
-        DeviceMemAllocMode::REQUIRE_HOST_VISIBLE,                           // Must be in RAM
+        VK_IMAGE_LAYOUT_UNDEFINED,                                     // Any mem contents from here on in must be preserved
+        DeviceMemAllocMode::PREFER_DEVICE_LOCAL,                           // Must be in RAM
         textureFormat,
         width,
         height,
@@ -111,10 +111,10 @@ bool MutableTexture::initAs3dTexture(
         device,
         VK_IMAGE_TYPE_3D,
         VK_IMAGE_VIEW_TYPE_MAX_ENUM,                                        // Don't create an image view! Mutable textures can't be sampled.
-        VK_IMAGE_TILING_LINEAR,                                             // Straight image storage - no fancy stuff
+        VK_IMAGE_TILING_OPTIMAL,                                             // Straight image storage - no fancy stuff
         VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,  // Mutable textures are only for transferring to/from and storage
-        VK_IMAGE_LAYOUT_PREINITIALIZED,                                     // Any mem contents from here on in must be preserved
-        DeviceMemAllocMode::REQUIRE_HOST_VISIBLE,                           // Must be in RAM
+        VK_IMAGE_LAYOUT_UNDEFINED,                                     // Any mem contents from here on in must be preserved
+        DeviceMemAllocMode::PREFER_DEVICE_LOCAL,                           // Must be in RAM
         textureFormat,
         width,
         height,
@@ -144,10 +144,10 @@ bool MutableTexture::initAsCubeTexture(
         device,
         VK_IMAGE_TYPE_2D,
         VK_IMAGE_VIEW_TYPE_MAX_ENUM,                                        // Don't create an image view! Mutable textures can't be sampled.
-        VK_IMAGE_TILING_LINEAR,                                             // Straight image storage - no fancy stuff
+        VK_IMAGE_TILING_OPTIMAL,                                             // Straight image storage - no fancy stuff
         VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,  // Mutable textures are only for transferring to/from and storage
-        VK_IMAGE_LAYOUT_PREINITIALIZED,                                     // Any mem contents from here on in must be preserved
-        DeviceMemAllocMode::REQUIRE_HOST_VISIBLE,                           // Must be in RAM
+        VK_IMAGE_LAYOUT_UNDEFINED,                                     // Any mem contents from here on in must be preserved
+        DeviceMemAllocMode::PREFER_DEVICE_LOCAL,                           // Must be in RAM
         textureFormat,
         width,
         height,

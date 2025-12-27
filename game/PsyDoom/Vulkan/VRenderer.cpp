@@ -43,10 +43,7 @@ BEGIN_NAMESPACE(VRenderer)
 // B8G8R8A8 should be supported everwhere and apparently is the most performant, but just in case offer some alternatives...
 static constexpr VkFormat ALLOWED_COLOR_SURFACE_FORMATS[] = {
     VK_FORMAT_B8G8R8A8_UNORM,
-    VK_FORMAT_R8G8B8A8_UNORM,
-    VK_FORMAT_A8B8G8R8_UNORM_PACK32,
-    VK_FORMAT_A2R10G10B10_UNORM_PACK32,
-    VK_FORMAT_A2B10G10R10_UNORM_PACK32
+    VK_FORMAT_R8G8B8A8_UNORM
 };
 
 // What format we use for 32-bit color and the preferred format for 16-bit color.
@@ -198,6 +195,7 @@ static void decideDrawSampleCount() noexcept {
 // Determines if 16-bit color framebuffers and textures are possible for the specified device
 //------------------------------------------------------------------------------------------------------------------------------------------
 static void determine16BitColorSupport(const vgl::PhysicalDevice& device) noexcept {
+#ifndef ANDROID
     // Can the PSX framebuffer texture use a 16-bit format?
     // This is not used for any rendering, just for copying to and blitting from...
     gbCanPsxFbUse16BitColor = device.findFirstSupportedOptimalTilingFormat(
@@ -217,7 +215,11 @@ static void determine16BitColorSupport(const vgl::PhysicalDevice& device) noexce
         // Color attachment can either be used as a transfer & sampling source (for blits and crossfades, with no MSAA) or an input attachment for MSAA resolve
         VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | ((gDrawSampleCount > 1) ? 0 : VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_BLIT_SRC_BIT)
     );
-}
+#else
+        gbCanVulkanFbUse16BitColor = false;
+        gbCanPsxFbUse16BitColor = false;
+#endif
+    }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
 // Decides on the color format used for the window/presentation surface as well as the colorspace
@@ -1060,7 +1062,7 @@ bool isSwapchainOutOfDate() noexcept {
 void rebuildGammaAdjustTex() noexcept {
     gGammaAdjustTex.destroy();
     
-    if (!gGammaAdjustTex.initAs1dTexture(gDevice, VK_FORMAT_R8_UNORM, 256))
+    if (!gGammaAdjustTex.initAs1dTexture(gDevice, VK_FORMAT_B8G8R8A8_UNORM, 256))
         FatalErrors::raise("Failed to alloc a texture used for gamma adjustment!");
     
     if (uint8_t* const pGammaRemapTbl = (uint8_t*) gGammaAdjustTex.lock()) {
