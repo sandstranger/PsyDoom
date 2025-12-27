@@ -1062,7 +1062,7 @@ bool isSwapchainOutOfDate() noexcept {
 void rebuildGammaAdjustTex() noexcept {
     gGammaAdjustTex.destroy();
     
-    if (!gGammaAdjustTex.initAs1dTexture(gDevice, VK_FORMAT_B8G8R8A8_UNORM, 256))
+    if (!gGammaAdjustTex.initAs1dTexture(gDevice, VK_FORMAT_R8_UNORM, 256))
         FatalErrors::raise("Failed to alloc a texture used for gamma adjustment!");
     
     if (uint8_t* const pGammaRemapTbl = (uint8_t*) gGammaAdjustTex.lock()) {
