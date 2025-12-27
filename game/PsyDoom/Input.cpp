@@ -523,6 +523,7 @@ static void handleSdlEvents() noexcept {
 //------------------------------------------------------------------------------------------------------------------------------------------
 void init() noexcept {
 #ifdef ANDROID
+    SDL_SetHint(SDL_HINT_TV_REMOTE_AS_JOYSTICK, "0");
     SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0");
     SDL_SetHint(SDL_HINT_JOYSTICK_RAWINPUT, "1");
     SDL_SetHint(SDL_HINT_JOYSTICK_RAWINPUT_CORRELATE_XINPUT, "1");
