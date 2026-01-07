@@ -142,7 +142,7 @@ static Uint32 getSdlWindowCreateFlags() noexcept {
     );
 
 #ifdef ANDROID
-    windowCreateFlags |= SDL_WINDOW_FULLSCREEN;
+    windowCreateFlags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
 #else
     if (Config::gbFullscreen) {
         windowCreateFlags |= (Config::gbExclusiveFullscreenMode) ? SDL_WINDOW_FULLSCREEN : SDL_WINDOW_FULLSCREEN_DESKTOP;
