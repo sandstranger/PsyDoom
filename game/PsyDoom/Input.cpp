@@ -57,6 +57,11 @@ static float gMouseWheelAxisMovements[NUM_MOUSE_WHEEL_AXES];
 // Did the window just lose focus?
 static bool gbWindowFocusJustLost;
 
+#if ANDROID
+    typedef void (*forceLandScapeActivityOrientationDelegate)();
+    static forceLandScapeActivityOrientationDelegate activityOrientationChangerInstance = nullptr;
+#endif
+
 //------------------------------------------------------------------------------------------------------------------------------------------
 // Vector utility functions
 //------------------------------------------------------------------------------------------------------------------------------------------
@@ -116,6 +121,13 @@ static float sdlAxisValueToFloat(const int16_t axis) noexcept {
         return (float) axis / 32768.0f;
     }
 }
+
+#if ANDROID
+    __attribute__((used)) __attribute__((visibility("default")))
+    void registerForceLandscapeActivityOrientationCallback (forceLandScapeActivityOrientationDelegate instance) {
+        activityOrientationChangerInstance = instance;
+    }
+#endif
 
 //------------------------------------------------------------------------------------------------------------------------------------------
 // Close the currently open game controller or generic joystick (if any).
@@ -270,6 +282,9 @@ static void handleSdlEvents() noexcept {
                 SDL_SetRelativeMouseMode(SDL_TRUE);
                 SDL_SetWindowGrab(Video::gpSdlWindow, SDL_TRUE);
                 gbWindowFocusJustLost = false;
+                if (activityOrientationChangerInstance!= nullptr){
+                    activityOrientationChangerInstance();
+                }
 #endif
                 // Tell the game to ignore firing until the fire button is released.
                 // This prevents clicking on the window with a mouse for example triggering firing.
