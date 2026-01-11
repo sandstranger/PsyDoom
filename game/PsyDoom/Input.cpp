@@ -123,10 +123,12 @@ static float sdlAxisValueToFloat(const int16_t axis) noexcept {
 }
 
 #if ANDROID
-    __attribute__((used)) __attribute__((visibility("default")))
-    void registerForceLandscapeActivityOrientationCallback (forceLandScapeActivityOrientationDelegate instance) {
-        activityOrientationChangerInstance = instance;
-    }
+extern "C" {
+__attribute__((used)) __attribute__((visibility("default")))
+void registerForceLandscapeActivityOrientationCallback(forceLandScapeActivityOrientationDelegate instance) {
+    activityOrientationChangerInstance = instance;
+}
+}
 #endif
 
 //------------------------------------------------------------------------------------------------------------------------------------------
