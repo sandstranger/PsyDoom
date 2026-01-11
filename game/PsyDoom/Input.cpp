@@ -231,10 +231,9 @@ static void rescanGameControllers() noexcept {
 }
 
 #if ANDROID
-extern "C"{
-void rescanGameControllersForced(){
+extern "C" {
+void rescanGameControllersForced() {
     rescanGameControllers();
-}
 }
 __attribute__((used)) __attribute__((visibility("default")))
 void onNativePause() {
@@ -258,6 +257,7 @@ void onNativeResume() {
     // Tell the game to ignore firing until the fire button is released.
     // This prevents clicking on the window with a mouse for example triggering firing.
     gbIgnoreCurrentAttack = true;
+}
 }
 #endif
 
