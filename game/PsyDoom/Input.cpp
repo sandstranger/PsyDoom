@@ -236,6 +236,29 @@ void rescanGameControllersForced(){
     rescanGameControllers();
 }
 }
+__attribute__((used)) __attribute__((visibility("default")))
+void onNativePause() {
+#ifndef ANDROID
+    SDL_ShowCursor(SDL_ENABLE);
+#else
+    SDL_ShowCursor(SDL_DISABLE);
+#endif
+    SDL_SetWindowGrab(Video::gpSdlWindow, SDL_FALSE);
+    SDL_SetRelativeMouseMode(SDL_FALSE);
+    gbWindowFocusJustLost = true;
+}
+__attribute__((used)) __attribute__((visibility("default")))
+void onNativeResume() {
+#ifdef ANDROID
+    SDL_ShowCursor(SDL_DISABLE);
+    SDL_SetRelativeMouseMode(SDL_TRUE);
+    SDL_SetWindowGrab(Video::gpSdlWindow, SDL_TRUE);
+    gbWindowFocusJustLost = false;
+#endif
+    // Tell the game to ignore firing until the fire button is released.
+    // This prevents clicking on the window with a mouse for example triggering firing.
+    gbIgnoreCurrentAttack = true;
+}
 #endif
 
 //------------------------------------------------------------------------------------------------------------------------------------------
@@ -283,27 +306,6 @@ static void handleSdlEvents() noexcept {
                 // Note: don't grab mouse input here, wait until the window's client area is actually clicked.
                 // This makes resizing and such easier in windowed mode.
                 bConsumeEvents = true;
-
-#ifdef ANDROID
-                SDL_ShowCursor(SDL_DISABLE);
-                SDL_SetRelativeMouseMode(SDL_TRUE);
-                SDL_SetWindowGrab(Video::gpSdlWindow, SDL_TRUE);
-                gbWindowFocusJustLost = false;
-#endif
-                // Tell the game to ignore firing until the fire button is released.
-                // This prevents clicking on the window with a mouse for example triggering firing.
-                gbIgnoreCurrentAttack = true;
-                break;
-
-            case SDL_APP_WILLENTERBACKGROUND :
-#ifndef ANDROID
-                SDL_ShowCursor(SDL_ENABLE);
-#else
-                SDL_ShowCursor(SDL_DISABLE);
-#endif
-                SDL_SetWindowGrab(Video::gpSdlWindow, SDL_FALSE);
-                SDL_SetRelativeMouseMode(SDL_FALSE);
-                gbWindowFocusJustLost = true;
                 break;
             case SDL_WINDOWEVENT: {
                 switch (sdlEvent.window.event) {
