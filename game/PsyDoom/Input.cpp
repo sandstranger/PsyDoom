@@ -266,6 +266,11 @@ static void handleSdlEvents() noexcept {
     bool bConsumeEvents = false;
 
     while (SDL_PollEvent(&sdlEvent) != 0) {
+#if ANDROID
+        if (sdlEvent.type == SDL_APP_DIDENTERFOREGROUND && activityOrientationChangerInstance!= nullptr){
+            activityOrientationChangerInstance();
+        }
+#endif
         switch (sdlEvent.type) {
             case SDL_QUIT:
                 // The application is requesting to quit
@@ -282,9 +287,6 @@ static void handleSdlEvents() noexcept {
                 SDL_SetRelativeMouseMode(SDL_TRUE);
                 SDL_SetWindowGrab(Video::gpSdlWindow, SDL_TRUE);
                 gbWindowFocusJustLost = false;
-                if (activityOrientationChangerInstance!= nullptr){
-                    activityOrientationChangerInstance();
-                }
 #endif
                 // Tell the game to ignore firing until the fire button is released.
                 // This prevents clicking on the window with a mouse for example triggering firing.
