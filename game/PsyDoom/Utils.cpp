@@ -95,7 +95,7 @@ std::string getOrCreateUserDataFolder() noexcept {
 #else
     std::string saveFileOrg = SAVE_FILE_ORG;
     std::string saveFileProduct = SAVE_FILE_PRODUCT;
-    std::string path = SDL_AndroidGetExternalStoragePath();
+    std::string path = getenv("PATH_TO_USER_FOLDER");
     path += "/" + saveFileOrg + "/" + saveFileProduct + "/";
     return path;
 #endif

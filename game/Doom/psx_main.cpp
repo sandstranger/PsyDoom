@@ -52,7 +52,7 @@
 int psx_main(const int argc, const char* const* const argv) noexcept {
 
 #ifdef ANDROID
-    chdir(SDL_AndroidGetExternalStoragePath());
+    chdir(getenv("PATH_TO_USER_FOLDER"));
 #endif
     // PsyDoom: setup logic for the new game host environment
     #if PSYDOOM_MODS
