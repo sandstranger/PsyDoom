@@ -50,10 +50,6 @@
 //      Doom's own heap would have been corrupted if LIBAPI's heap was in conflicting use of the same memory.
 //------------------------------------------------------------------------------------------------------------------------------------------
 int psx_main(const int argc, const char* const* const argv) noexcept {
-
-#ifdef ANDROID
-    chdir(getenv("PATH_TO_USER_FOLDER"));
-#endif
     // PsyDoom: setup logic for the new game host environment
     #if PSYDOOM_MODS
         // Parse command line arguments and configuration and initialize input systems

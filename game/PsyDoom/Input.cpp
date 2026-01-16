@@ -58,8 +58,16 @@ static float gMouseWheelAxisMovements[NUM_MOUSE_WHEEL_AXES];
 static bool gbWindowFocusJustLost;
 
 #if ANDROID
+    static std::string g_pathToSDLControllerDB;
     typedef void (*forceLandScapeActivityOrientationDelegate)();
     static forceLandScapeActivityOrientationDelegate activityOrientationChangerInstance = nullptr;
+
+extern "C"{
+__attribute__((used)) __attribute__((visibility("default")))
+void setPathToSDLControllerDB (const char *pathToSDLControllerDB){
+    g_pathToSDLControllerDB = pathToSDLControllerDB;
+}
+}
 #endif
 
 //------------------------------------------------------------------------------------------------------------------------------------------
@@ -562,7 +570,7 @@ void init() noexcept {
     }
 
 #ifdef ANDROID
-    const auto pathToSdl2ControllerDb = getenv("PATH_TO_SDL2_CONTROLLER_DB");
+    const auto pathToSdl2ControllerDb = g_pathToSDLControllerDB.c_str();
     if (SDL_GameControllerAddMappingsFromFile(pathToSdl2ControllerDb) < 0) {
         SDL_Log("Couldn't load mappings: %s\n", SDL_GetError());
     } else{

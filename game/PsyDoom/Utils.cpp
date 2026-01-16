@@ -38,6 +38,17 @@ typedef std::chrono::high_resolution_clock::time_point timepoint_t;
 // When we last did platform updates
 static timepoint_t gLastPlatformUpdateTime = {};
 
+#if ANDROID
+static std::string g_pathToUserFolder;
+extern "C"{
+__attribute__((used)) __attribute__((visibility("default")))
+void setPathToUserFolder (const char *pathToUserFolder) {
+    g_pathToUserFolder = pathToUserFolder;
+}
+}
+
+#endif
+
 //------------------------------------------------------------------------------------------------------------------------------------------
 // Gets the game version string.
 // This is used for the window title.
@@ -95,8 +106,7 @@ std::string getOrCreateUserDataFolder() noexcept {
 #else
     std::string saveFileOrg = SAVE_FILE_ORG;
     std::string saveFileProduct = SAVE_FILE_PRODUCT;
-    std::string path = getenv("PATH_TO_USER_FOLDER");
-    path += "/" + saveFileOrg + "/" + saveFileProduct + "/";
+    std::string path = g_pathToUserFolder + "/" + saveFileOrg + "/" + saveFileProduct + "/";
     return path;
 #endif
 }
