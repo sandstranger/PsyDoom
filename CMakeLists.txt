@@ -24,6 +24,10 @@ set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 include(HelperFunctions)
 include(BuildSetup)
 
+if (ANDROID)
+    add_compile_options(-fno-lto)
+endif()
+
 build_setup()
 
 # Global identifiers for each project/target
