@@ -786,8 +786,10 @@ void destroy() noexcept {
 // Alternatively 'isRendering()' can be queried at any time to tell if drawing can take place.
 //------------------------------------------------------------------------------------------------------------------------------------------
 bool beginFrame() noexcept {
+#ifndef ANDROID    
     // Must have ended the frame or not started one previously
     ASSERT(!gbDidBeginFrame);
+#endif    
     gbDidBeginFrame = true;
     gbUsingGammaAdjustThisFrame = PlayerPrefs::isUsingGammaAdjust();
 
@@ -853,8 +855,10 @@ bool isRendering() noexcept {
 // End the current frame and present to the screen
 //------------------------------------------------------------------------------------------------------------------------------------------
 void endFrame() noexcept {
+#ifndef ANDROID    
     // Must have begun the frame
     ASSERT(gbDidBeginFrame);
+#endif    
     gbDidBeginFrame = false;
 
     // Render path specific frame end, if we are rendering; note: may cause transfer tasks to be kicked off...
