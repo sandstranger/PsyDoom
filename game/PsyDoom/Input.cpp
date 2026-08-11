@@ -245,21 +245,33 @@ void rescanGameControllersForced() {
 }
 __attribute__((used)) __attribute__((visibility("default")))
 void onNativePause() {
-    SDL_ShowCursor(SDL_DISABLE);
-    SDL_SetWindowGrab(Video::gpSdlWindow, SDL_FALSE);
-    SDL_SetRelativeMouseMode(SDL_FALSE);
-    gbWindowFocusJustLost = true;
 }
 __attribute__((used)) __attribute__((visibility("default")))
 void onNativeResume() {
-    SDL_ShowCursor(SDL_DISABLE);
-    SDL_SetRelativeMouseMode(SDL_TRUE);
-    SDL_SetWindowGrab(Video::gpSdlWindow, SDL_TRUE);
-    gbWindowFocusJustLost = false;
-    // Tell the game to ignore firing until the fire button is released.
-    // This prevents clicking on the window with a mouse for example triggering firing.
-    gbIgnoreCurrentAttack = true;
 }
+}
+static int SDLCALL AndroidLifeCycleEventFilter(void*, SDL_Event* event)
+{
+    switch (event->type)
+    {
+        case SDL_APP_WILLENTERBACKGROUND:
+            SDL_ShowCursor(SDL_DISABLE);
+            SDL_SetWindowGrab(Video::gpSdlWindow, SDL_FALSE);
+            SDL_SetRelativeMouseMode(SDL_FALSE);
+            gbWindowFocusJustLost = true;
+            break;
+        case SDL_APP_DIDENTERFOREGROUND:
+            SDL_ShowCursor(SDL_DISABLE);
+            SDL_SetRelativeMouseMode(SDL_TRUE);
+            SDL_SetWindowGrab(Video::gpSdlWindow, SDL_TRUE);
+            gbWindowFocusJustLost = false;
+            // Tell the game to ignore firing until the fire button is released.
+            // This prevents clicking on the window with a mouse for example triggering firing.
+            gbIgnoreCurrentAttack = true;
+            break;
+
+    }
+    return 1;
 }
 #endif
 
@@ -570,6 +582,7 @@ void init() noexcept {
     }
 
 #ifdef ANDROID
+    SDL_AddEventWatch(AndroidLifeCycleEventFilter, nullptr);
     const auto pathToSdl2ControllerDb = g_pathToSDLControllerDB.c_str();
     if (SDL_GameControllerAddMappingsFromFile(pathToSdl2ControllerDb) < 0) {
         SDL_Log("Couldn't load mappings: %s\n", SDL_GetError());
