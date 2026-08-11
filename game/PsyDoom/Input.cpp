@@ -18,6 +18,11 @@
 #include <cstring>
 #include <SDL.h>
 
+BEGIN_NAMESPACE(VRenderer)
+extern void destroyVulkanSwapChain();
+extern void recreateVulkanSwapChain();
+END_NAMESPACE(VRenderer)
+
 BEGIN_NAMESPACE(Input)
 
 static bool                             gbIsQuitRequested;
@@ -250,6 +255,7 @@ __attribute__((used)) __attribute__((visibility("default")))
 void onNativeResume() {
 }
 }
+
 static int SDLCALL AndroidLifeCycleEventFilter(void*, SDL_Event* event)
 {
     switch (event->type)
@@ -259,6 +265,7 @@ static int SDLCALL AndroidLifeCycleEventFilter(void*, SDL_Event* event)
             SDL_SetWindowGrab(Video::gpSdlWindow, SDL_FALSE);
             SDL_SetRelativeMouseMode(SDL_FALSE);
             gbWindowFocusJustLost = true;
+            VRenderer::destroyVulkanSwapChain();
             break;
         case SDL_APP_DIDENTERFOREGROUND:
             SDL_ShowCursor(SDL_DISABLE);
@@ -268,6 +275,7 @@ static int SDLCALL AndroidLifeCycleEventFilter(void*, SDL_Event* event)
             // Tell the game to ignore firing until the fire button is released.
             // This prevents clicking on the window with a mouse for example triggering firing.
             gbIgnoreCurrentAttack = true;
+            VRenderer::recreateVulkanSwapChain();
             break;
 
     }

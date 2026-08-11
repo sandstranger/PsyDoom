@@ -374,19 +374,18 @@ static void recreateSwapImageReadySemaphores() noexcept {
 }
 
 #ifdef ANDROID
-extern "C" {
+__attribute__((used)) __attribute__((visibility("default")))
 void destroyVulkanSwapChain() {
     if (destroySwapChainOnApplicationPause) {
         paused = true;
     }
 }
-
+__attribute__((used)) __attribute__((visibility("default")))
 void recreateVulkanSwapChain() {
     if (destroySwapChainOnApplicationPause) {
         needToRecreaseVulkanSurfaces = paused;
         paused = false;
     }
-}
 }
 #endif
 //------------------------------------------------------------------------------------------------------------------------------------------
