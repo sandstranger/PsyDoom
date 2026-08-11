@@ -36,6 +36,7 @@
 
 #include <regex>
 #include <SDL_vulkan.h>
+#include <atomic>
 
 BEGIN_NAMESPACE(VRenderer)
 
@@ -62,9 +63,9 @@ static bool gbCanPsxFbUse16BitColor;
 static bool gbCanVulkanFbUse16BitColor;
 
 #ifdef ANDROID
-    static bool paused = false;
-    static bool destroySwapChainOnApplicationPause = false;
-    static bool needToRecreaseVulkanSurfaces = false;
+    static std::atomic<bool> paused {false};
+    static std::atomic<bool> destroySwapChainOnApplicationPause {false};
+    static std::atomic<bool> needToRecreaseVulkanSurfaces {false};
 #endif
 
     // Render paths used
@@ -376,15 +377,15 @@ static void recreateSwapImageReadySemaphores() noexcept {
 #ifdef ANDROID
 extern "C" {
 void destroyVulkanSwapChain() {
-    if (destroySwapChainOnApplicationPause) {
-        paused = true;
+    if (destroySwapChainOnApplicationPause.load()) {
+        paused.store(true);
     }
 }
 
 void recreateVulkanSwapChain() {
-    if (destroySwapChainOnApplicationPause) {
-        needToRecreaseVulkanSurfaces = paused;
-        paused = false;
+    if (destroySwapChainOnApplicationPause.load()) {
+        needToRecreaseVulkanSurfaces.store(paused.load());
+        paused.store(false);
     }
 }
 }
@@ -397,7 +398,7 @@ void recreateVulkanSwapChain() {
 //------------------------------------------------------------------------------------------------------------------------------------------
 static bool ensureValidSwapchainAndFramebuffers() noexcept {
 #ifdef ANDROID
-    if (paused){
+    if (paused.load()){
         return false;
     }
 #endif
@@ -408,7 +409,7 @@ static bool ensureValidSwapchainAndFramebuffers() noexcept {
     bool bGpuIsIdle = false;
     
 #ifdef ANDROID
-    if ((!gSwapchain.isValid()) || gSwapchain.needsRecreate() || VRenderer::isSwapchainOutOfDate() || needToRecreaseVulkanSurfaces) {
+    if ((!gSwapchain.isValid()) || gSwapchain.needsRecreate() || VRenderer::isSwapchainOutOfDate() || needToRecreaseVulkanSurfaces.load()) {
 #else
     if ((!gSwapchain.isValid()) || gSwapchain.needsRecreate() || VRenderer::isSwapchainOutOfDate()) {
 #endif
@@ -418,9 +419,9 @@ static bool ensureValidSwapchainAndFramebuffers() noexcept {
         gSwapchain.destroy();
 
 #ifdef ANDROID
-        if (needToRecreaseVulkanSurfaces){
+        if (needToRecreaseVulkanSurfaces.load()){
             gWindowSurface.recreateSurface();
-            needToRecreaseVulkanSurfaces = false;
+            needToRecreaseVulkanSurfaces.store(false);
         }
 #endif
 
@@ -561,7 +562,7 @@ bool isPhysicalDeviceSuitable(const vgl::PhysicalDevice& device, const vgl::Devi
 //------------------------------------------------------------------------------------------------------------------------------------------
 void init() noexcept {
 #if ANDROID
-    destroySwapChainOnApplicationPause = true;
+    destroySwapChainOnApplicationPause.store(true);
 #endif
     // Coord sys info is initially invalid
     updateCoordSysInfo();
