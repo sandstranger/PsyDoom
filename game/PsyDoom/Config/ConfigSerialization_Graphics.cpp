@@ -150,7 +150,7 @@ void initCfgSerialization_Graphics() noexcept {
         "reduce perceived input latency but will also greatly increase GPU and CPU usage.\n"
         "Disable if you prefer to lower energy usage for slightly increased input latency.",
         gbVulkanTripleBuffer,
-        false
+        true
     );
 
     cfg.vulkanDrawExtendedStatusBar = makeConfigField(

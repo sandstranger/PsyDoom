@@ -304,12 +304,18 @@ void Swapchain::choosePresentMode(const SwapPresentMode wantedPresentMode) noexc
 
     // Prefer VK_PRESENT_MODE_MAILBOX_KHR if available when we want to do triple buffering. Whenever we submit new images
     // to the queue in this mode and the queue is full then the current image in waiting will simply be replaced...
+    //
+    // Android: triple buffering is FIFO with 3 images there. Mailbox renders frames as fast as the GPU can only to drop most of
+    // them, a phone heats up and throttles its GPU for nothing; FIFO with a third image still keeps a frame that misses a vsync
+    // from stalling the GPU until the next one (a double buffered FIFO drops to half the refresh rate then).
+#ifndef ANDROID
     if ((wantedPresentMode == SwapPresentMode::TripleBuffer) && (mLength >= 3)) {
         if (Utils::containerContains(vkPresentModes, VK_PRESENT_MODE_MAILBOX_KHR)) {
             mPresentMode = VK_PRESENT_MODE_MAILBOX_KHR;
             return;
         }
     }
+#endif
 
     // Prefer VK_PRESENT_MODE_FIFO_KHR
     if (Utils::containerContains(vkPresentModes, VK_PRESENT_MODE_FIFO_KHR)) {
