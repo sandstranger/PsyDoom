@@ -46,6 +46,12 @@ public:
     inline const std::vector<VkImage> getAttachmentImages() const noexcept { return mAttachmentImages; }
     inline const std::vector<VkImageView> getAttachmentImageViews() const noexcept { return mAttachmentImageViews; }
 
+    // Generation of the swapchain whose image this framebuffer was made with (see 'Swapchain::getGeneration'), 0 if none
+    inline uint64_t getSwapchainGeneration() const noexcept { return mSwapchainGeneration; }
+
+    // Tells if this framebuffer was made with an image of the given swapchain in its current incarnation
+    bool isForSwapchain(const Swapchain& swapchain) const noexcept;
+
 private:
     // Copy and move assign disallowed
     Framebuffer(const Framebuffer& other) = delete;
@@ -65,6 +71,7 @@ private:
     VkFramebuffer               mVkFramebuffer;
     std::vector<VkImage>        mAttachmentImages;
     std::vector<VkImageView>    mAttachmentImageViews;
+    uint64_t                    mSwapchainGeneration;
 };
 
 END_NAMESPACE(vgl)

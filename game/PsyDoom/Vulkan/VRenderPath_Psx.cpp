@@ -552,6 +552,7 @@ bool VRenderPath_Psx::doGammaAdjustFramebuffersNeedRecreate() noexcept {
         
         const bool bValidFramebuffer = (
             framebuffer.isValid() &&
+            framebuffer.isForSwapchain(swapchain) &&
             (framebufferImages.size() == 1) &&
             (framebufferImages[0] == swapchainImages[swapImgIdx]) &&
             (framebuffer.getWidth() == swapchain.getSwapExtentWidth()) &&

@@ -22,6 +22,7 @@ Framebuffer::Framebuffer() noexcept
     , mVkFramebuffer(VK_NULL_HANDLE)
     , mAttachmentImages()
     , mAttachmentImageViews()
+    , mSwapchainGeneration(0)
 {
 }
 
@@ -36,12 +37,14 @@ Framebuffer::Framebuffer(Framebuffer&& other) noexcept
     , mVkFramebuffer(other.mVkFramebuffer)
     , mAttachmentImages(std::move(other.mAttachmentImages))
     , mAttachmentImageViews(std::move(other.mAttachmentImageViews))
+    , mSwapchainGeneration(other.mSwapchainGeneration)
 {
     other.mbIsValid = false;
     other.mWidth = {};
     other.mHeight = {};
     other.mpDevice = nullptr;
     other.mVkFramebuffer = VK_NULL_HANDLE;
+    other.mSwapchainGeneration = 0;
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
@@ -92,7 +95,18 @@ bool Framebuffer::init(
     mAttachmentImages.insert(mAttachmentImages.begin() + swapImgInsertIdx, swapchain.getVkImages()[swapchainImageIdx]);
     mAttachmentImageViews.insert(mAttachmentImageViews.begin() + swapImgInsertIdx, swapchain.getVkImageViews()[swapchainImageIdx]);
 
-    return initInternal(renderPass, fbWidth, fbHeight);
+    if (!initInternal(renderPass, fbWidth, fbHeight))
+        return false;
+
+    mSwapchainGeneration = swapchain.getGeneration();
+    return true;
+}
+
+//------------------------------------------------------------------------------------------------------------------------------------------
+// Tells if this framebuffer was made with an image of the given swapchain in its current incarnation
+//------------------------------------------------------------------------------------------------------------------------------------------
+bool Framebuffer::isForSwapchain(const Swapchain& swapchain) const noexcept {
+    return (mbIsValid && (mSwapchainGeneration != 0) && (mSwapchainGeneration == swapchain.getGeneration()));
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
@@ -162,6 +176,7 @@ void Framebuffer::destroy(const bool bImmediately, const bool bForceIfInvalid) n
     mpDevice = nullptr;
     mHeight = {};
     mWidth = {};
+    mSwapchainGeneration = 0;
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------

@@ -43,6 +43,11 @@ public:
     inline bool isValid() const noexcept { return mbIsValid; }
     inline bool needsRecreate() const noexcept { return mbNeedsRecreate; }
     inline bool isSurfaceLost() const noexcept { return mbSurfaceLost; }
+
+    // Unique (never reused) number of the current swapchain, 0 if there is none. Framebuffers made with swapchain images must be remade when
+    // it changes: the handles of the new swapchain's images can have the same values as the destroyed ones (the driver reuses the memory),
+    // so comparing VkImage handles does not tell that a framebuffer still references destroyed swapchain image views.
+    inline uint64_t getGeneration() const noexcept { return mGeneration; }
     inline uint32_t getAcquiredImageIdx() const noexcept { return mAcquiredImageIdx; }
     inline LogicalDevice* getDevice() const noexcept { return mpDevice; }
     inline const VkSurfaceFormatKHR& getSurfaceFormat() const noexcept { return mSurfaceFormat; }
@@ -85,6 +90,7 @@ private:
     VkSwapchainKHR              mVkSwapchain;           // Handle to the actual Vulkan swap chain
     std::vector<VkImage>        mVkImages;              // Handles to the Vulkan images in the swap chain
     std::vector<VkImageView>    mVkImageViews;          // Image views for images in the swap chain
+    uint64_t                    mGeneration;            // Unique number of this swapchain instance (0 = none), see 'getGeneration'
 };
 
 END_NAMESPACE(vgl)

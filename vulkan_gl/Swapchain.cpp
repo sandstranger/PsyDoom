@@ -13,6 +13,9 @@
 
 BEGIN_NAMESPACE(vgl)
 
+// Source of the swapchain generation numbers: never reused, unlike Vulkan handle values
+static uint64_t gSwapchainGenerationCounter = 0;
+
 //------------------------------------------------------------------------------------------------------------------------------------------
 // Creates an uninitialized swapchain
 //------------------------------------------------------------------------------------------------------------------------------------------
@@ -30,6 +33,7 @@ Swapchain::Swapchain() noexcept
     , mVkSwapchain(VK_NULL_HANDLE)
     , mVkImages()
     , mVkImageViews()
+    , mGeneration(0)
 {
 }
 
@@ -108,6 +112,7 @@ bool Swapchain::init(
 
     // All went well if we got to here!
     mbIsValid = true;
+    mGeneration = ++gSwapchainGenerationCounter;
     return true;
 }
 
@@ -154,6 +159,7 @@ void Swapchain::destroy(const bool bForceIfInvalid) noexcept {
     mAcquiredImageIdx = INVALID_IMAGE_IDX;
     mbNeedsRecreate = false;
     mbSurfaceLost = false;
+    mGeneration = 0;
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------

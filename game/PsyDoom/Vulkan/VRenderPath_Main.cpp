@@ -240,6 +240,7 @@ bool VRenderPath_Main::ensureValidFramebuffers(
                 
                 bValidFrameBuffers_GammaAdjust = (
                     framebuffer.isValid() &&
+                    framebuffer.isForSwapchain(swapchain) &&
                     (swapAttachmentIdx < framebuffer.getAttachmentImages().size()) &&
                     (swapchainIdx < swapchain.getLength()) &&
                     (framebuffer.getAttachmentImages()[swapAttachmentIdx] == swapchain.getVkImages()[swapchainIdx])
