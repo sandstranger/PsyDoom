@@ -233,7 +233,6 @@ void D_DoomMain() noexcept {
             gStartGameType = gt_single;
         }
 
-#ifndef ANDROID
         // PsyDoom: play intro movies and logos unless disabled.
         // Note: also skip them if we are playing a demo file or warping directly to a map.
         const bool bSkipIntros = (Config::gbSkipIntros || ProgArgs::gPlayDemoFilePath[0] || gbStartupWarpToMap);
@@ -241,7 +240,6 @@ void D_DoomMain() noexcept {
         if (!bSkipIntros) {
             D_PlayIntros();
         }
-#endif
     #endif
 
     // Clearing some global tick counters and inputs
@@ -294,7 +292,8 @@ void D_DoomMain() noexcept {
             return true;
         #endif
     };
-#ifndef ANDROID
+
+    // Note: on Android the main menu never times out (see 'M_Ticker'), so the title and demo sequence only runs until the menu is opened
     while (continueRunning()) {
         // PsyDoom: treat 'ga_quitapp' the same as 'ga_exit' here.
         // This makes us skip over the demo sequences and credits etc. if the app is quitting.
@@ -369,20 +368,6 @@ void D_DoomMain() noexcept {
             #endif
         }
     }
-#else
-    START_Title();
-    STOP_Title(ga_exit);
-    while (continueRunning()) {
-        // Go back to the title screen if timing out
-        const gameaction_t result = RunMenu();
-
-        // PsyDoom: quit the application entirely if requested
-#if PSYDOOM_MODS
-        if (result == ga_quitapp)
-            return;
-#endif
-    }
-#endif
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------

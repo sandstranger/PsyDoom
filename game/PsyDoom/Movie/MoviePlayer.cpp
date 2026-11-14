@@ -142,8 +142,10 @@ static bool tryDecodeMovieAudioSector() noexcept {
         ASSERT(iter != gDecodingAudioSectors.end());
         gDecodingAudioSectors.erase(iter);
         
-        // The audio sector is now free again since decoding failed
-        gEmptyAudioSectors.push_back(gpCurAudioSector);
+        // The audio sector is now free again since decoding failed.
+        // Note: this used to push 'gpCurAudioSector' instead, the sector being PLAYED (owned by the audio thread, which writes that pointer
+        // concurrently) or null, and lost the sector that was popped for decoding.
+        gEmptyAudioSectors.push_back(pAudioSector);
 
         // We are done!
         return false;
