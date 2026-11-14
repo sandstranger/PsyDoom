@@ -109,13 +109,28 @@ Fence& RingbufferMgr::getCurrentBufferFence() noexcept {
 //------------------------------------------------------------------------------------------------------------------------------------------
 uint8_t RingbufferMgr::acquireNextBuffer() noexcept {
     ASSERT(mbIsValid);
-    const uint8_t currentBufferIdx = mBufferIndex;
-    Fence& currentFence = mFences[currentBufferIdx];
-    currentFence.waitUntilSignalled();
-    currentFence.resetSignal();
-    doCleanupForBufferIndex(currentBufferIdx);
-    mBufferIndex = (currentBufferIdx + 1) % Defines::RINGBUFFER_SIZE;
-    return mBufferIndex;
+
+    // Wait for the fence of the NEXT buffer (the frame submitted RINGBUFFER_SIZE - 1 frames ago), not of the one just submitted: waiting
+    // for the frame just submitted made the CPU idle for the whole GPU frame and the GPU idle while the CPU prepared the next one, every
+    // frame. Everything used by a frame is per ringbuffer slot (command buffers, vertex buffers, descriptor sets, staging buffers, retired
+    // resources), so the slot is free for reuse once its own fence is signalled.
+    //
+    // Note: the fences of all slots but the first one start signalled (see 'init'), so the first wait for each of them does not block and
+    // every fence is reset before the submission that signals it (a fence passed to vkQueueSubmit must be unsignalled).
+    const uint8_t nextBufferIdx = (mBufferIndex + 1) % Defines::RINGBUFFER_SIZE;
+    Fence& nextRingbufferFence = mFences[nextBufferIdx];
+    nextRingbufferFence.waitUntilSignalled();
+
+    // Cleanup all resources that we can for this ringbuffer index
+    doCleanupForBufferIndex(nextBufferIdx);
+
+    // Reset the fence for this ringbuffer slot.
+    // It will be signalled again once all operations have completed for this ringbuffer slot:
+    nextRingbufferFence.resetSignal();
+
+    // Move onto the next ringbuffer slot
+    mBufferIndex = nextBufferIdx;
+    return nextBufferIdx;
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
