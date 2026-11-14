@@ -42,6 +42,7 @@ public:
 
     inline bool isValid() const noexcept { return mbIsValid; }
     inline bool needsRecreate() const noexcept { return mbNeedsRecreate; }
+    inline bool isSurfaceLost() const noexcept { return mbSurfaceLost; }
     inline uint32_t getAcquiredImageIdx() const noexcept { return mAcquiredImageIdx; }
     inline LogicalDevice* getDevice() const noexcept { return mpDevice; }
     inline const VkSurfaceFormatKHR& getSurfaceFormat() const noexcept { return mSurfaceFormat; }
@@ -72,6 +73,7 @@ private:
 
     bool                        mbIsValid;              // True if this object was created & initialized successfully
     bool                        mbNeedsRecreate;        // True if the swapchain needs recreation, due to window resizing for instance
+    bool                        mbSurfaceLost;          // True if acquire/present reported VK_ERROR_SURFACE_LOST_KHR: the window surface must be recreated too
     uint32_t                    mAcquiredImageIdx;      // Currently acquired image index, or INVALID_IMAGE_IDX if not acquired.
     LogicalDevice*              mpDevice;               // The logical Vulkan device this swap chain is for
     DeviceSurfaceCaps           mDeviceSurfaceCaps;     // Capabilities of the device with respect to the window surface

@@ -19,6 +19,7 @@ BEGIN_NAMESPACE(vgl)
 Swapchain::Swapchain() noexcept
     : mbIsValid(false)
     , mbNeedsRecreate(false)
+    , mbSurfaceLost(false)
     , mAcquiredImageIdx(INVALID_IMAGE_IDX)
     , mpDevice(nullptr)
     , mSurfaceFormat()
@@ -152,6 +153,7 @@ void Swapchain::destroy(const bool bForceIfInvalid) noexcept {
     mpDevice = nullptr;
     mAcquiredImageIdx = INVALID_IMAGE_IDX;
     mbNeedsRecreate = false;
+    mbSurfaceLost = false;
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
@@ -196,11 +198,28 @@ bool Swapchain::presentAcquiredImage(const Semaphore& renderFinishedSemaphore) n
     if (queuePresentResult == VK_SUCCESS) {
         return true;
     }
+#ifdef ANDROID
+    else if (queuePresentResult == VK_SUBOPTIMAL_KHR) {
+        // Android returns this on EVERY present while the swapchain's 'preTransform' differs from the window's transform hint, i.e.
+        // always for a landscape game on a phone whose display is naturally portrait, since the swapchain is deliberately created with
+        // the identity transform (the compositor rotates). It does not report size changes this way (those are detected by
+        // 'VRenderer::isSwapchainOutOfDate'). Recreating the swapchain for it would mean idling the GPU and recreating the swapchain
+        // and its framebuffers every single frame, so: the image was presented, carry on.
+        return true;
+    }
+#endif
     else {
         if ((queuePresentResult == VK_ERROR_OUT_OF_DATE_KHR) || (queuePresentResult == VK_SUBOPTIMAL_KHR)) {
             // Swapchain present failed due to need for recreation!
             mbNeedsRecreate = true;
+        } else if (queuePresentResult == VK_ERROR_SURFACE_LOST_KHR) {
+            // The native window went away (e.g Android surface destroyed while the app was in the background): the surface must be
+            // recreated along with the swapchain.
+            mbNeedsRecreate = true;
+            mbSurfaceLost = true;
         } else {
+            // Unknown error: try recreating the swapchain rather than presenting to it forever
+            mbNeedsRecreate = true;
             ASSERT_FAIL("Failed to present the presentation queue with an unknown error!");
         }
     }
@@ -247,6 +266,15 @@ uint32_t Swapchain::acquireImage(Semaphore& imageReadySemaphore) noexcept {
         ASSERT(mAcquiredImageIdx < mLength);
         return mAcquiredImageIdx;
     } else {
+        // An out of date swapchain must be recreated: nothing else would notice when the window size did not change (an Android
+        // swapchain orphaned by a surface change), and acquiring would just keep failing - no frame would ever be shown again.
+        if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+            mbNeedsRecreate = true;
+        } else if (result == VK_ERROR_SURFACE_LOST_KHR) {
+            mbNeedsRecreate = true;
+            mbSurfaceLost = true;
+        }
+
         mAcquiredImageIdx = INVALID_IMAGE_IDX;
         return INVALID_IMAGE_IDX;
     }

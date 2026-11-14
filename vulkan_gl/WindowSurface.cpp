@@ -71,8 +71,11 @@ bool WindowSurface::recreateSurface() noexcept {
         mVkSurface = VK_NULL_HANDLE;
     }
 
+    // Note: this fails validly while there is no native window yet (Android: the app is coming back to the foreground but its surface
+    // is not created yet). The caller retries later; no surface exists meanwhile (getVkSurface() returns a null handle).
     if (!SDL_Vulkan_CreateSurface(mpSdlWindow, mpVulkanInstance->getVkInstance(), &mVkSurface)) {
-        ASSERT_FAIL("Failed to create the window surface!");
+        mVkSurface = VK_NULL_HANDLE;
+        SDL_Log("Vulkan surface recreation failed, will retry: %s", SDL_GetError());
         return false;
     }
 

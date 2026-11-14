@@ -407,7 +407,14 @@ static bool ensureValidSwapchainAndFramebuffers() noexcept {
     bool bGpuIsIdle = false;
     
 #ifdef ANDROID
-    if ((!gSwapchain.isValid()) || gSwapchain.needsRecreate() || VRenderer::isSwapchainOutOfDate() || needToRecreaseVulkanSurfaces) {
+    // The window surface is recreated when coming back to the foreground (the native window was destroyed in the background), when the
+    // swapchain reported it lost, or when an earlier recreation failed (no native window yet at that point): until that succeeds there
+    // is no surface, no swapchain and no frame.
+    if (gSwapchain.isSurfaceLost() || (!gWindowSurface.getVkSurface())) {
+        needToRecreaseVulkanSurfaces = true;
+    }
+
+    if ((!gSwapchain.isValid()) || gSwapchain.needsRecreate() || needToRecreaseVulkanSurfaces || VRenderer::isSwapchainOutOfDate()) {
 #else
     if ((!gSwapchain.isValid()) || gSwapchain.needsRecreate() || VRenderer::isSwapchainOutOfDate()) {
 #endif
@@ -417,8 +424,10 @@ static bool ensureValidSwapchainAndFramebuffers() noexcept {
         gSwapchain.destroy();
 
 #ifdef ANDROID
-        if (needToRecreaseVulkanSurfaces){
-            gWindowSurface.recreateSurface();
+        if (needToRecreaseVulkanSurfaces) {
+            if (!gWindowSurface.recreateSurface())
+                return false;   // Retried next frame: the flag stays set
+
             needToRecreaseVulkanSurfaces = false;
         }
 #endif
