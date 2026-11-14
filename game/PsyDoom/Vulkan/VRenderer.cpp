@@ -197,15 +197,19 @@ static void decideDrawSampleCount() noexcept {
     }
 
     // Every Android GPU renders in tiles: the samples of the tile being rendered live in on-chip tile memory, which is what makes MSAA
-    // nearly free there - as long as they fit. The budget at full tile size is 128 bits of color per pixel on Mali (Bifrost, Valhall up
-    // to G7x/G57/G68/G78; newer ones have more), i.e 4 samples of 32-bit color; Adreno's bins and PowerVR's tiles shrink likewise as the
-    // bytes per pixel grow. Beyond that the tiles get smaller (more tiles, the geometry of each re-read for every one of them), the
-    // resolve subpass reads more samples per pixel, and 8x/16x MSAA is not cheap on any mobile tiler: at most what fits, i.e 4x.
+    // nearly free there - as long as everything fits. The budget at full tile size is 128 bits of color per pixel on Mali (Bifrost,
+    // Valhall up to G7x/G57/G68/G78); Adreno's bins and PowerVR's tiles shrink likewise as the bytes per pixel grow. The MSAA render pass
+    // keeps more than the samples in the tile: the 1x resolve attachment (stored, it is the frame history for crossfades and the loading
+    // plaque) and the swapchain image written by the last subpass, 32 bits each. So: samples * 32 + 32 + 32 <= 128, i.e 2x at most.
+    // Forced on Android whatever count is configured: above it the tiles get smaller (more tiles, the geometry of each re-read for every
+    // one of them) and the resolve subpass reads more samples per pixel.
     {
         constexpr uint32_t TILE_COLOR_BITS_PER_PIXEL = 128;
         constexpr uint32_t DRAW_COLOR_BITS_PER_SAMPLE = 32;     // COLOR_32_FORMAT
-        constexpr uint32_t TILE_MAX_SAMPLES = TILE_COLOR_BITS_PER_PIXEL / DRAW_COLOR_BITS_PER_SAMPLE;
-        static_assert((TILE_MAX_SAMPLES >= 1) && ((TILE_MAX_SAMPLES & (TILE_MAX_SAMPLES - 1)) == 0));
+        constexpr uint32_t RESOLVE_COLOR_BITS = 32;             // COLOR_32_FORMAT, 1x
+        constexpr uint32_t SWAPCHAIN_COLOR_BITS = 32;           // B8G8R8A8/R8G8B8A8 swapchain image
+        constexpr uint32_t TILE_MAX_SAMPLES = (TILE_COLOR_BITS_PER_PIXEL - RESOLVE_COLOR_BITS - SWAPCHAIN_COLOR_BITS) / DRAW_COLOR_BITS_PER_SAMPLE;
+        static_assert(TILE_MAX_SAMPLES == 2);
 
         // Note: VK_SAMPLE_COUNT_N_BIT == N, so this keeps the bits for 1..TILE_MAX_SAMPLES samples
         deviceMsaaModes &= (VkSampleCountFlags)((TILE_MAX_SAMPLES << 1) - 1);
