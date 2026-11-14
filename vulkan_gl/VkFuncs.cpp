@@ -134,6 +134,7 @@ void VkFuncs::loadInstanceFuncs(const VkInstance vkInstance) noexcept {
     LOAD_INST_FUNC(vkGetDeviceProcAddr);
     LOAD_INST_FUNC(vkGetPhysicalDeviceFeatures);
     LOAD_INST_FUNC(vkGetPhysicalDeviceFormatProperties);
+    LOAD_INST_FUNC(vkGetPhysicalDeviceImageFormatProperties);
     LOAD_INST_FUNC(vkGetPhysicalDeviceMemoryProperties);
     LOAD_INST_FUNC(vkGetPhysicalDeviceProperties);
     LOAD_INST_FUNC(vkGetPhysicalDeviceQueueFamilyProperties);

@@ -35,6 +35,7 @@
 #include "WindowSurface.h"
 
 #include <regex>
+#include <SDL_log.h>
 #include <SDL_vulkan.h>
 
 BEGIN_NAMESPACE(VRenderer)
@@ -172,7 +173,44 @@ static void decideDrawSampleCount() noexcept {
 
     // Vulkan specifies up to 64x MSAA currently...
     const VkPhysicalDeviceLimits& deviceLimits = gpPhysicalDevice->getProps().limits;
-    const VkSampleCountFlags deviceMsaaModes = deviceLimits.framebufferColorSampleCounts;
+    VkSampleCountFlags deviceMsaaModes = deviceLimits.framebufferColorSampleCounts;
+
+#ifdef ANDROID
+    // The real limit of the attachment that is multisampled: 'framebufferColorSampleCounts' is only the generic one for color attachments,
+    // the counts for a given format and usage can be lower. That attachment is the draw color attachment, always 'COLOR_32_FORMAT' on
+    // Android (see 'determine16BitColorSupport'), used as a transient color + input attachment (read by the resolve subpass).
+    {
+        const vgl::VkFuncs& vkFuncs = gpPhysicalDevice->getVkFuncs();
+        VkImageFormatProperties drawFormatProps = {};
+
+        const VkResult formatQueryResult = vkFuncs.vkGetPhysicalDeviceImageFormatProperties(
+            gpPhysicalDevice->getVkPhysicalDevice(),
+            COLOR_32_FORMAT,
+            VK_IMAGE_TYPE_2D,
+            VK_IMAGE_TILING_OPTIMAL,
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT,
+            0,
+            &drawFormatProps
+        );
+
+        deviceMsaaModes &= (formatQueryResult == VK_SUCCESS) ? drawFormatProps.sampleCounts : (VkSampleCountFlags) VK_SAMPLE_COUNT_1_BIT;
+    }
+
+    // Every Android GPU renders in tiles: the samples of the tile being rendered live in on-chip tile memory, which is what makes MSAA
+    // nearly free there - as long as they fit. The budget at full tile size is 128 bits of color per pixel on Mali (Bifrost, Valhall up
+    // to G7x/G57/G68/G78; newer ones have more), i.e 4 samples of 32-bit color; Adreno's bins and PowerVR's tiles shrink likewise as the
+    // bytes per pixel grow. Beyond that the tiles get smaller (more tiles, the geometry of each re-read for every one of them), the
+    // resolve subpass reads more samples per pixel, and 8x/16x MSAA is not cheap on any mobile tiler: at most what fits, i.e 4x.
+    {
+        constexpr uint32_t TILE_COLOR_BITS_PER_PIXEL = 128;
+        constexpr uint32_t DRAW_COLOR_BITS_PER_SAMPLE = 32;     // COLOR_32_FORMAT
+        constexpr uint32_t TILE_MAX_SAMPLES = TILE_COLOR_BITS_PER_PIXEL / DRAW_COLOR_BITS_PER_SAMPLE;
+        static_assert((TILE_MAX_SAMPLES >= 1) && ((TILE_MAX_SAMPLES & (TILE_MAX_SAMPLES - 1)) == 0));
+
+        // Note: VK_SAMPLE_COUNT_N_BIT == N, so this keeps the bits for 1..TILE_MAX_SAMPLES samples
+        deviceMsaaModes &= (VkSampleCountFlags)((TILE_MAX_SAMPLES << 1) - 1);
+    }
+#endif
 
     if ((wantedNumSamples >= 64) && (deviceMsaaModes & VK_SAMPLE_COUNT_64_BIT)) {
         gDrawSampleCount = 64;
@@ -189,6 +227,17 @@ static void decideDrawSampleCount() noexcept {
     } else {
         gDrawSampleCount = 1;
     }
+
+#ifdef ANDROID
+    if ((int32_t) gDrawSampleCount != wantedNumSamples) {
+        SDL_Log(
+            "PsyDoom Vulkan: MSAA %dx requested, using %ux (sample counts usable for the draw attachment: 0x%x)",
+            (int) wantedNumSamples,
+            (unsigned) gDrawSampleCount,
+            (unsigned) deviceMsaaModes
+        );
+    }
+#endif
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------

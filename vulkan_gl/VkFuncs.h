@@ -57,6 +57,7 @@ struct VkFuncs {
     DEFINE_VK_FUNC(vkGetDeviceProcAddr)
     DEFINE_VK_FUNC(vkGetPhysicalDeviceFeatures)
     DEFINE_VK_FUNC(vkGetPhysicalDeviceFormatProperties)
+    DEFINE_VK_FUNC(vkGetPhysicalDeviceImageFormatProperties)
     DEFINE_VK_FUNC(vkGetPhysicalDeviceMemoryProperties)
     DEFINE_VK_FUNC(vkGetPhysicalDeviceProperties)
     DEFINE_VK_FUNC(vkGetPhysicalDeviceQueueFamilyProperties)
