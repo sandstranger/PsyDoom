@@ -799,6 +799,17 @@ bool beginFrame() noexcept {
     if (!ensureValidSwapchainAndFramebuffers())
         return false;
 
+#ifdef ANDROID
+    // Tile based GPUs: the main render path writes the swapchain image from tile memory in the render pass's last subpass (the gamma
+    // adjust one, with the identity LUT at the default gamma) instead of storing the frame and copying it with a blit afterwards: no
+    // separate transfer pass reading the whole frame back. Only when the frame is the swapchain's size: that subpass does not scale.
+    if ((!gbUsingGammaAdjustThisFrame) && (gpCurRenderPath == &gRenderPath_Main) &&
+        (gFramebufferW == gSwapchain.getSwapExtentWidth()) && (gFramebufferH == gSwapchain.getSwapExtentHeight())
+    ) {
+        gbUsingGammaAdjustThisFrame = true;
+    }
+#endif
+
     // Acquire a swapchain image and bail if that failed.
     // Note: we might already have an image if we skipped presenting a frame last time around.
     const uint32_t ringbufferIdx = gDevice.getRingbufferMgr().getBufferIndex();

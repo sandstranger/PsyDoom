@@ -650,9 +650,18 @@ bool DeviceMemMgr::allocUnpooled(
     const DeviceMemAllocMode allocMode,
     DeviceMemAlloc& allocInfoOut
 ) noexcept {
+    // Transient attachments: lazily allocated memory first, if the device has it for this image
+    if (allocMode == DeviceMemAllocMode::UNPOOLED_PREFER_LAZILY_ALLOCATED) {
+        if (allocUnpooled(numBytes, allowedVkMemTypeBits, true, false, allocInfoOut, VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT))
+            return true;
+    }
+
     // Note: this can be called even when a pooled allocation is requested, if the alloc is too big.
     // Therefore the alloc mode can be either of these two things:
-    if ((allocMode == DeviceMemAllocMode::PREFER_DEVICE_LOCAL) || (allocMode == DeviceMemAllocMode::UNPOOLED_PREFER_DEVICE_LOCAL)) {
+    if ((allocMode == DeviceMemAllocMode::PREFER_DEVICE_LOCAL) ||
+        (allocMode == DeviceMemAllocMode::UNPOOLED_PREFER_DEVICE_LOCAL) ||
+        (allocMode == DeviceMemAllocMode::UNPOOLED_PREFER_LAZILY_ALLOCATED)
+    ) {
         if (allocUnpooled(numBytes, allowedVkMemTypeBits, true, false, allocInfoOut))
             return true;
     }
@@ -670,7 +679,8 @@ bool DeviceMemMgr::allocUnpooled(
     const uint32_t allowedVkMemTypeBits,
     const bool bRequireDeviceLocalMem,
     const bool bRequireHostVisibleMem,
-    DeviceMemAlloc& allocInfoOut
+    DeviceMemAlloc& allocInfoOut,
+    const VkMemoryPropertyFlags extraRequiredVkMemFlags
 ) noexcept {
     // Sanity checks
     ASSERT(mbIsValid);
@@ -680,7 +690,8 @@ bool DeviceMemMgr::allocUnpooled(
     // Figure out the vulkan memory property flags we want
     const VkMemoryPropertyFlags vkMemPropertyFlagsRequired = (
         (bRequireDeviceLocalMem ? VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT : 0) |
-        (bRequireHostVisibleMem ? VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT : 0)
+        (bRequireHostVisibleMem ? VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT : 0) |
+        extraRequiredVkMemFlags
     );
 
     // Try to find a memory type that satisfies both the required memory property flags we want as well as being

@@ -170,10 +170,16 @@ bool VRenderPath_Main::ensureValidFramebuffers(
         attachment.destroy(bDestroyImmediate);
         mbRenderedToDrawColorAttachments[i] = false;
         
-        VkImageUsageFlags colorAttachUsage = VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-        
+        VkImageUsageFlags colorAttachUsage = VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+
         if (!bUsingMsaa) {
-            colorAttachUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT; // If not using MSAA then this image might be used in a blit
+            // Kept as the previous frame for crossfades and the loading plaque (sampled), or blitted to the swapchain
+            colorAttachUsage |= VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        } else {
+            // With MSAA the samples are only ever read by the resolve subpass, in tile memory, and never stored: a transient
+            // attachment, which tile based GPUs back with lazily allocated memory (no physical memory for the samples at all).
+            // The frame history for crossfades etc. is the resolve attachment.
+            colorAttachUsage |= VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
         }
 
         if (!attachment.initAsRenderTexture(device, true, mColorFormat, colorAttachUsage, fbWidth, fbHeight, mNumDrawSamples))
@@ -485,9 +491,15 @@ bool VRenderPath_Main::initRenderPass(vgl::RenderPass& renderPass, const bool bG
         // When using MSAA or gamma adjustment, then this attachment will be drawn via a shader and used as an intermediate input.
         // Because of this, we don't care about storing it's contents to VRAM at the end of the render pass, and thus can save on memory bandwidth.
         // If NOT using MSAA or gamma adjustment then we blit this attachment to the swapchain image (outside of the render pass), in which case we must store it to VRAM first.
-        if (bUsingMsaa || bGammaAdjusted) {
+        if (bUsingMsaa) {
             attach.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;              // Don't need to write to VRAM at the end of the renderpass (image unused outside of the renderpass).
             attach.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;  // Don't care: would say undefined but that is not allowed.
+        }
+        else if (bGammaAdjusted) {
+            // Stored: crossfades and the loading plaque sample the previous frames from this attachment (no MSAA). With
+            // DONT_CARE a tile based GPU really drops it, so those effects showed undefined contents with gamma adjustment.
+            attach.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            attach.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         }
         else {
             attach.storeOp = VK_ATTACHMENT_STORE_OP_STORE;              // Needs to be stored to VRAM for the blit (which happens outside of the render pass).
@@ -508,8 +520,9 @@ bool VRenderPath_Main::initRenderPass(vgl::RenderPass& renderPass, const bool bG
         attach.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         
         if (bGammaAdjusted) {
-            attach.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;              // Don't need to write to VRAM at the end of the renderpass (image unused outside of the renderpass).
-            attach.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;  // Don't care: would say undefined but that is not allowed.
+            // Stored: the previous frames for crossfades and the loading plaque (MSAA) are read from this attachment
+            attach.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            attach.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         }
         else {
             attach.storeOp = VK_ATTACHMENT_STORE_OP_STORE;              // Needs to be stored to VRAM for the blit (which happens outside of the render pass).

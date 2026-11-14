@@ -184,7 +184,8 @@ private:
         const uint32_t allowedVkMemTypeBits,
         const bool bRequireDeviceLocalMem,
         const bool bRequireHostVisibleMem,
-        DeviceMemAlloc& allocInfoOut
+        DeviceMemAlloc& allocInfoOut,
+        const VkMemoryPropertyFlags extraRequiredVkMemFlags = 0
     ) noexcept;
 
     void freeUnpooledAlloc(DeviceMemAlloc& alloc) noexcept;

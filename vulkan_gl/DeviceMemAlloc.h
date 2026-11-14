@@ -67,7 +67,12 @@ enum class DeviceMemAllocMode : uint8_t {
     UNPOOLED_PREFER_DEVICE_LOCAL,
 
     // Same as 'REQUIRE_HOST_VISIBLE' except the allocation should be unpooled
-    UNPOOLED_REQUIRE_HOST_VISIBLE
+    UNPOOLED_REQUIRE_HOST_VISIBLE,
+
+    // Unpooled, for images with 'VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT': lazily allocated device memory where there is such a
+    // memory type (tile based GPUs: an attachment that is never loaded or stored then gets no physical memory at all), otherwise
+    // the same as 'UNPOOLED_PREFER_DEVICE_LOCAL'.
+    UNPOOLED_PREFER_LAZILY_ALLOCATED
 };
 
 //------------------------------------------------------------------------------------------------------------------------------------------
@@ -81,6 +86,7 @@ inline bool isUnpooledDeviceMemAllocMode(const DeviceMemAllocMode mode) noexcept
 
         case DeviceMemAllocMode::UNPOOLED_PREFER_DEVICE_LOCAL:
         case DeviceMemAllocMode::UNPOOLED_REQUIRE_HOST_VISIBLE:
+        case DeviceMemAllocMode::UNPOOLED_PREFER_LAZILY_ALLOCATED:
             return true;
     }
 
