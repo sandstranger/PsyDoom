@@ -66,6 +66,8 @@
 #include "z_zone.h"
 
 #include <algorithm>
+#include <array>
+#include <unordered_map>
 #include <cmath>
 #include <cstdio>
 #include <vector>
@@ -372,6 +374,33 @@ static texdata_t TC_CacheTexData(const texture_t& tex) {
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
+// PsyDoom: the CLUT indices used by the pixels last uploaded for each texture (bit i of the 256: index i occurs).
+// Set on every upload, dropped when the texture leaves the cache, so it always describes what is in VRAM.
+//------------------------------------------------------------------------------------------------------------------------------------------
+static std::unordered_map<const texture_t*, std::array<uint64_t, 4>> gTexClutIdxMasks;
+
+void I_NoteTexClutIndices(const texture_t& tex, const std::byte* const pPixels, const uint32_t numPixels) noexcept {
+    std::array<uint64_t, 4> mask = {};
+
+    for (uint32_t i = 0; i < numPixels; ++i) {
+        const uint32_t idx = (uint32_t) pPixels[i];
+        mask[idx >> 6] |= (uint64_t) 1 << (idx & 63);
+    }
+
+    gTexClutIdxMasks[&tex] = mask;
+}
+
+bool I_TexAvoidsClutIndices(const texture_t& tex, const uint64_t clutIdxMask[4]) noexcept {
+    const auto iter = gTexClutIdxMasks.find(&tex);
+
+    if (iter == gTexClutIdxMasks.end())
+        return false;   // Not known: assume it might use them
+
+    const std::array<uint64_t, 4>& used = iter->second;
+    return (((used[0] & clutIdxMask[0]) | (used[1] & clutIdxMask[1]) | (used[2] & clutIdxMask[2]) | (used[3] & clutIdxMask[3])) == 0);
+}
+
+//------------------------------------------------------------------------------------------------------------------------------------------
 // Uploads the texture to VRAM and saves the details of where it is located.
 // The texture is uploaded to the specified page at the current fill location.
 //------------------------------------------------------------------------------------------------------------------------------------------
@@ -402,6 +431,7 @@ static void TC_UploadTexToVram(texture_t& tex, const texdata_t& texData, const t
             );
 
             LIBGPU_LoadImage8(dstVramRect, texData.pBytes + sizeof(texlump_header_t));
+            I_NoteTexClutIndices(tex, texData.pBytes + sizeof(texlump_header_t), std::min<uint32_t>((uint32_t) tex.width * (uint32_t) tex.height, (uint32_t)(texData.size - sizeof(texlump_header_t))));
         #else
             SRECT dstVramRect;
             LIBGPU_setRECT(
@@ -413,6 +443,7 @@ static void TC_UploadTexToVram(texture_t& tex, const texdata_t& texData, const t
             );
 
             LIBGPU_LoadImage(dstVramRect, (uint16_t*)(texData.pBytes + sizeof(texlump_header_t)));
+            I_NoteTexClutIndices(tex, texData.pBytes + sizeof(texlump_header_t), std::min<uint32_t>((uint32_t)(tex.width / 2) * 2u * (uint32_t) tex.height, (uint32_t)(texData.size - sizeof(texlump_header_t))));
         #endif
     }
     else {
@@ -581,6 +612,8 @@ void I_UnlockAllTexCachePages() noexcept {
 // Note this should only be called if the texture is actually in the cache!
 //------------------------------------------------------------------------------------------------------------------------------------------
 void I_RemoveTexCacheEntry(texture_t& tex) noexcept {
+    gTexClutIdxMasks.erase(&tex);   // What is in VRAM there is no longer this texture
+
     // Sanity checks: make sure the texture has a valid texture cache entry and size
     ASSERT(tex.ppTexCacheEntries);
     ASSERT((tex.width16 > 0) && (tex.width16 <= TCACHE_CELLS_X));

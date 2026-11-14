@@ -166,8 +166,8 @@ static void RV_DrawSegSolid(const rvseg_t& seg, const subsector_t& subsec) noexc
                 vb = vt + wallH;
             }
 
-            VDrawing::setDrawPipeline(gOpaqueGeomPipeline);
             texture_t& tex_u = gpTextures[gpTextureTranslation[side.toptexture]];
+            VDrawing::setDrawPipeline(RV_OpaqueGeomPipelineFor(tex_u));
             RV_DrawWall(x1, z1, x2, z2, fty, bty, u1, u2, vt, vb, frontSec, tex_u, bDrawTransparent);
         }
 
@@ -189,8 +189,8 @@ static void RV_DrawSegSolid(const rvseg_t& seg, const subsector_t& subsec) noexc
                 vt = vb - wallH;
             }
 
-            VDrawing::setDrawPipeline(gOpaqueGeomPipeline);
             texture_t& tex_l = gpTextures[gpTextureTranslation[side.bottomtexture]];
+            VDrawing::setDrawPipeline(RV_OpaqueGeomPipelineFor(tex_l));
             RV_DrawWall(x1, z1, x2, z2, bby, fby, u1, u2, vt, vb, frontSec, tex_l, bDrawTransparent);
         }
     }
@@ -220,8 +220,8 @@ static void RV_DrawSegSolid(const rvseg_t& seg, const subsector_t& subsec) noexc
         }
 
         // Draw the wall
-        VDrawing::setDrawPipeline(gOpaqueGeomPipeline);
         texture_t& tex_m = gpTextures[gpTextureTranslation[side.midtexture]];
+        VDrawing::setDrawPipeline(RV_OpaqueGeomPipelineFor(tex_m));
         RV_DrawWall(x1, z1, x2, z2, midTy, midBy, u1, u2, vt, vb, frontSec, tex_m, bDrawTransparent);
     }
 }

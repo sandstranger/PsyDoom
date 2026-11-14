@@ -10,6 +10,11 @@
 layout(constant_id = 0) const bool WRAP_TEXTURE = true;             // Whether to use wrap texture mode or clamp to edge; clamping is used for sprites to prevent edge artifacts
 layout(constant_id = 1) const bool USE_PSX_16_BIT_SHADING = true;   // Whether to shade with 16-bit precision like the original PlayStation
 
+// Whether a '0' texel discards the fragment (PSX masking). Pipelines for geometry whose texture uses no CLUT entry that is '0'
+// turn this off: the result is identical, and without 'discard' in the shader tile based GPUs can remove the hidden fragments of
+// everything drawn underneath (Mali forward pixel kill and early ZS, Adreno LRZ, PowerVR HSR) instead of shading all of them.
+layout(constant_id = 2) const bool ALLOW_DISCARD = true;
+
 // A texture containing the entirety of PSX VRAM
 layout(set = 0, binding = 0) uniform usampler2D vramTex;
 
@@ -66,7 +71,7 @@ float getLightDiminishingMultiplier(float z, vec4 in_lightDimMode) {
 //----------------------------------------------------------------------------------------------------------------------
 void main() {
     // Sample the raw texel first
-    out_color = tex8bpp(vramTex, ivec2(floor(in_uv_z.xy)), in_texWinPos, in_texWinSize, in_clutPos, in_stmul, WRAP_TEXTURE, true);
+    out_color = tex8bpp(vramTex, ivec2(floor(in_uv_z.xy)), in_texWinPos, in_texWinSize, in_clutPos, in_stmul, WRAP_TEXTURE, ALLOW_DISCARD);
 
     // Compute color multiply after accounting for input color and light diminishing effects.
     // Add a little bias also to prevent switching back and forth between cases that are close, due to float inprecision...

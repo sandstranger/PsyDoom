@@ -479,12 +479,17 @@ static void initPipelineMultisampleStates(vgl::LogicalDevice& device, const uint
     gMultisampleState_perSettings = vgl::PipelineMultisampleState().setToDefault();
     gMultisampleState_perSettings.rasterizationSamples = (VkSampleCountFlagBits) numSamples;
 
+    // Android: no sample rate shading. It runs the fragment shader once per sample instead of once per pixel, so 4x MSAA made
+    // every wall, floor and sprite fragment (two dependent VRAM/CLUT fetches each) cost four times as much, on the fill rate
+    // bound mobile GPUs where MSAA is otherwise nearly free (the samples are resolved in tile memory). Edges stay antialiased.
+#if !ANDROID
     if (device.getPhysicalDevice()->getFeatures().sampleRateShading) {
         // Enable sample rate shading if we can get it for nicer MSAA.
         // Force it to do MSAA for every single fragment to help eliminate texture shimmer and shader aliasing.
         gMultisampleState_perSettings.sampleShadingEnable = true;
         gMultisampleState_perSettings.minSampleShading = 1.0f;
     }
+#endif
 
     // This is a variant of the 'per settings' state but without sample rate shading (edge only MSAA).
     // This mode is more appropriate for UI elements since MSAA can blur them slightly.
@@ -620,20 +625,25 @@ static void initDrawPipeline(
     const vgl::PipelineDepthStencilState& depthStencilState,
     const bool bNoTexture,
     const bool bWrapTexture,
-    const bool bEdgeOnlyMsaa
+    const bool bEdgeOnlyMsaa,
+    const bool bAllowDiscard = true
 ) noexcept {
-    // Shader specialization constants
+    // Shader specialization constants.
+    // Note: an entry for a constant a shader does not declare is ignored (only the world shader has 'ALLOW_DISCARD').
     struct ShaderSpecConsts {
         VkBool32 bWrapTexture;          // Whether to do wrapping (true) or clamping (false) when texturing
         VkBool32 bUse16BitShading;      // Whether to use the original PSX 16-bit shading or not
+        VkBool32 bAllowDiscard;         // Whether a '0' texel discards the fragment (world shader)
     } shaderSpecConsts;
 
     shaderSpecConsts.bWrapTexture = bWrapTexture;
     shaderSpecConsts.bUse16BitShading = (!Config::gbUseVulkan32BitShading);
+    shaderSpecConsts.bAllowDiscard = bAllowDiscard;
 
     const VkSpecializationMapEntry specializationMapEntries[] = {
         { 0, offsetof(ShaderSpecConsts, bWrapTexture), sizeof(shaderSpecConsts.bWrapTexture) },
         { 1, offsetof(ShaderSpecConsts, bUse16BitShading), sizeof(shaderSpecConsts.bUse16BitShading) },
+        { 2, offsetof(ShaderSpecConsts, bAllowDiscard), sizeof(shaderSpecConsts.bAllowDiscard) },
     };
 
     VkSpecializationInfo specializationInfo = {};
@@ -697,6 +707,11 @@ static void initPipelineSet_Main(
     
     initDrawPipeline(pipelineSet.get(VPipelineType_Main::World_GeomMasked), renderPass,
         gShaders_world, gInputAS_triList, gRasterState_backFaceCull, gBlendState_noBlend, gDepthState_disabled, false, true, false
+    );
+
+    // The same for walls and flats whose texture uses no '0' CLUT entry: no discard in the shader (see 'RV_OpaqueGeomPipelineFor')
+    initDrawPipeline(pipelineSet.get(VPipelineType_Main::World_GeomOpaque), renderPass,
+        gShaders_world, gInputAS_triList, gRasterState_backFaceCull, gBlendState_noBlend, gDepthState_disabled, false, true, false, false
     );
     
     initDrawPipeline(pipelineSet.get(VPipelineType_Main::World_GeomAlpha), renderPass,

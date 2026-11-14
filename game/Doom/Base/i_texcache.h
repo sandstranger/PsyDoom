@@ -48,5 +48,10 @@ static constexpr uint32_t NUM_TCACHE_PAGE_CELLS = TCACHE_CELLS_X * TCACHE_CELLS_
 
 void I_CacheTex(texture_t& tex) noexcept;
 void I_RemoveTexCacheEntry(texture_t& tex) noexcept;
+
+// PsyDoom: which CLUT indices the pixels uploaded for a texture use (8bpp). The Vulkan renderer draws walls and flats whose
+// texture uses no CLUT entry that is '0' (transparent on the PSX) without 'discard', see 'RV_OpaqueGeomPipelineFor'.
+void I_NoteTexClutIndices(const texture_t& tex, const std::byte* const pPixels, const uint32_t numPixels) noexcept;
+bool I_TexAvoidsClutIndices(const texture_t& tex, const uint64_t clutIdxMask[4]) noexcept;
 void I_PurgeTexCache() noexcept;
 void I_VramViewerDraw(const uint32_t texPageIdx) noexcept;

@@ -90,8 +90,8 @@ static void RV_DrawPlane(
     uint8_t lightDimModeFlags = (gbDoViewLighting) ? V_LIGHTDIM_FLAG_FLATS : V_LIGHTDIM_FLAG_NO_LIGHTDIM;
     lightDimModeFlags |= (R_UseAlpha_0_05_ShadingMode()) ? V_LIGHTDIM_FLAG_ALPHA_0_05 : 0;
 
-    // Ensure we have the correct draw pipeline set
-    VDrawing::setDrawPipeline(gOpaqueGeomPipeline);
+    // Ensure we have the correct draw pipeline set (no 'discard' if the flat has no transparent texels)
+    VDrawing::setDrawPipeline(RV_OpaqueGeomPipelineFor(tex));
 
     // Do all the triangles for the plane.
     // Note that all draw calls assume that the correct pipeline has already been set beforehand.

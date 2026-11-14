@@ -23,6 +23,7 @@ enum class VPipelineType_Main : uint8_t {
     UI_8bpp_Add,                // 2D/UI: texture mapped with clamping @ 8bpp, masked & additive blended (used for player weapon when partial invisibility is active)
     UI_16bpp,                   // 2D/UI: texture mapped with clamping @ 16bpp, masked but no blending
     World_GeomMasked,           // 3D world/view: textured with wrapping @ 8bpp and lit, masked but no blending
+    World_GeomOpaque,           // 3D world/view: as 'World_GeomMasked' for textures that use no '0' CLUT entry: no 'discard' (tile based GPUs)
     World_GeomAlpha,            // 3D world/view: textured with wrapping @ 8bpp and lit, masked & alpha blended
     World_SpriteMasked,         // 3D world/view: textured with clamping @ 8bpp and lit, masked but no blending
     World_SpriteAlpha,          // 3D world/view: textured with clamping @ 8bpp and lit, masked & alpha blended

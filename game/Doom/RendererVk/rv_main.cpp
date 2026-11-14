@@ -16,8 +16,11 @@
 #include "Doom/Renderer/r_main.h"
 #include "Doom/Renderer/r_sky.h"
 #include "Doom/Renderer/r_things.h"
+#include "Doom/Base/i_texcache.h"
+#include "Gpu.h"
 #include "PsyDoom/Config/Config.h"
 #include "PsyDoom/PlayerPrefs.h"
+#include "PsyDoom/PsxVm.h"
 #include "PsyDoom/Utils.h"
 #include "PsyDoom/Vulkan/VDrawing.h"
 #include "PsyDoom/Vulkan/VRenderer.h"
@@ -38,6 +41,7 @@ uint16_t            gClutX, gClutY;             // X and Y position in VRAM for 
 Matrix4f            gSpriteBillboardMatrix;     // A transform matrix containing the axis vectors used for sprite billboarding
 Matrix4f            gViewProjMatrix;            // The combined view and projection transform matrix for the scene
 VPipelineType_Main  gOpaqueGeomPipeline;        // The pipeline to use for drawing opaque geometry
+uint64_t            gClutZeroIdxMask[4];        // Bit i set: entry i of the 3D view's CLUT is '0' (a transparent texel)
 
 //------------------------------------------------------------------------------------------------------------------------------------------
 // Determine various parameters affecting the draw, including view position, projection matrix and so on
@@ -141,12 +145,41 @@ static void RV_DetermineDrawParams() noexcept {
     // Save the VRAM coordinate of the current palette CLUT
     RV_ClutIdToClutXy(g3dViewPaletteClutId, gClutX, gClutY);
 
+    // Which of its entries are '0', i.e a transparent texel: read from PSX VRAM, which the Vulkan renderer's copy mirrors
+    {
+        const Gpu::Core& psxGpu = PsxVm::gGpu;
+        gClutZeroIdxMask[0] = gClutZeroIdxMask[1] = gClutZeroIdxMask[2] = gClutZeroIdxMask[3] = 0;
+
+        for (uint32_t i = 0; i < 256; ++i) {
+            const uint32_t x = ((uint32_t) gClutX + i) % psxGpu.ramPixelW;
+            const uint32_t y = (uint32_t) gClutY % psxGpu.ramPixelH;
+
+            if (psxGpu.pRam[x + (uintptr_t) y * psxGpu.ramPixelW] == 0) {
+                gClutZeroIdxMask[i >> 6] |= (uint64_t) 1 << (i & 63);
+            }
+        }
+    }
+
     // Determine the pipeline to use for drawing fully opaque geometry
     if (gpViewPlayer->cheats & CF_XRAYVISION) {
         gOpaqueGeomPipeline = VPipelineType_Main::World_GeomAlpha;
     } else {
         gOpaqueGeomPipeline = VPipelineType_Main::World_GeomMasked;
     }
+}
+
+//------------------------------------------------------------------------------------------------------------------------------------------
+// The pipeline for a wall or flat that would otherwise use 'gOpaqueGeomPipeline'.
+// A texture whose pixels use no '0' entry of the 3D view's CLUT never discards a fragment, so it is drawn by the pipeline without
+// 'discard' (identical result): tile based GPUs then remove the hidden fragments of everything drawn underneath it (Mali forward
+// pixel kill and early ZS, Adreno LRZ, PowerVR HSR), which matters with the painter's order and no depth buffer of this renderer.
+//------------------------------------------------------------------------------------------------------------------------------------------
+VPipelineType_Main RV_OpaqueGeomPipelineFor(texture_t& tex) noexcept {
+    if (gOpaqueGeomPipeline != VPipelineType_Main::World_GeomMasked)
+        return gOpaqueGeomPipeline;     // X-ray vision: everything is blended
+
+    RV_UploadDirtyTex(tex);             // So what is in VRAM (and its CLUT indices) is current before deciding
+    return (I_TexAvoidsClutIndices(tex, gClutZeroIdxMask)) ? VPipelineType_Main::World_GeomOpaque : VPipelineType_Main::World_GeomMasked;
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------

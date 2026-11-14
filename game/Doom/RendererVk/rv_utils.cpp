@@ -6,6 +6,7 @@
 #include "rv_utils.h"
 
 #include "Doom/Base/i_main.h"
+#include "Doom/Base/i_texcache.h"
 #include "Doom/Base/w_wad.h"
 #include "Doom/Game/doomdata.h"
 #include "Doom/Game/g_game.h"
@@ -160,6 +161,11 @@ void RV_UploadDirtyTex(texture_t& tex) noexcept {
     const SRECT vramRect = getTextureVramRect(tex);
     LIBGPU_LoadImage(vramRect, (uint16_t*)(pLumpData + sizeof(texlump_header_t)));
     tex.uploadFrameNum = gNumFramesDrawn;
+
+    // The CLUT indices of what was uploaded: walls and flats that use no transparent one are drawn without 'discard'
+    const uint32_t numPixelBytes = (uint32_t) vramRect.w * 2u * (uint32_t) vramRect.h;
+    const uint32_t numLumpPixels = (texLump.uncompressedSize > sizeof(texlump_header_t)) ? (uint32_t)(texLump.uncompressedSize - sizeof(texlump_header_t)) : 0u;
+    I_NoteTexClutIndices(tex, pLumpData + sizeof(texlump_header_t), std::min(numPixelBytes, numLumpPixels));
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
