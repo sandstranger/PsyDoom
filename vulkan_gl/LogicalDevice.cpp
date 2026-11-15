@@ -16,6 +16,10 @@
 #include "VulkanInstance.h"
 #include "WindowSurface.h"
 
+#if VGL_USE_SWAPPY
+    #include "SwappyVkController.h"
+#endif
+
 BEGIN_NAMESPACE(vgl)
 
 // Queue priority constant
@@ -325,6 +329,25 @@ bool LogicalDevice::createDeviceAndQueues() noexcept {
         std::vector<const char*> reqDeviceExts;
         reqDeviceExts.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
 
+        #if VGL_USE_SWAPPY
+            // Android frame pacing (Swappy): the extensions it wants, VK_GOOGLE_display_timing when the device has it
+            if (!mbIsHeadless) {
+                const std::vector<VkExtensionProperties>& availableExts = mpPhysicalDevice->getExtensions().getAllExtensions();
+                const char* swappyExts[4] = {};
+                const uint32_t numSwappyExts = SwappyVkController_GetDeviceExtensions(
+                    mpPhysicalDevice->getVkPhysicalDevice(),
+                    (uint32_t) availableExts.size(),
+                    availableExts.data(),
+                    swappyExts,
+                    (uint32_t)(sizeof(swappyExts) / sizeof(swappyExts[0]))
+                );
+
+                for (uint32_t i = 0; i < numSwappyExts; ++i) {
+                    reqDeviceExts.push_back(swappyExts[i]);
+                }
+            }
+        #endif
+
         VkDeviceCreateInfo createInfo = {};
         createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
         createInfo.pQueueCreateInfos = requiredQueueCreateInfos;
@@ -346,6 +369,13 @@ bool LogicalDevice::createDeviceAndQueues() noexcept {
     if (!gatherCreatedQueueHandles(requiredQueueCreateInfos, numQueuesToCreate))
         return false;
 
+    #if VGL_USE_SWAPPY
+        // Android frame pacing (Swappy) presents on the presentation queue: it needs it and its family
+        if (!mbIsHeadless) {
+            SwappyVkController_SetPresentQueue(mVkDevice, mPresentationQueue, mPresentationQueueFamilyIdx);
+        }
+    #endif
+
     // All went well if we have got to here
     return true;
 }
@@ -355,6 +385,10 @@ bool LogicalDevice::createDeviceAndQueues() noexcept {
 //------------------------------------------------------------------------------------------------------------------------------------------
 void LogicalDevice::destroyDeviceAndQueues() noexcept {
     if (mVkDevice) {
+        #if VGL_USE_SWAPPY
+            SwappyVkController_DestroyDevice(mVkDevice);     // Swappy's fences and command buffers for the device
+        #endif
+
         mVkFuncs.vkDestroyDevice(mVkDevice, nullptr);
         mVkDevice = VK_NULL_HANDLE;
     }

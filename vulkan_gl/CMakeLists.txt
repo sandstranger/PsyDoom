@@ -108,3 +108,10 @@ target_link_libraries(${VULKAN_GL_TGT_NAME} PUBLIC
 )
 
 target_include_directories(${VULKAN_GL_TGT_NAME} PUBLIC ${INCLUDE_PATHS})
+
+# Android: frame pacing of the presentation with Swappy (SwappyVk), through the launcher's graphics layer
+# which has the frame pacing settings. See 'Swapchain::presentAcquiredImage'.
+if (ANDROID AND TARGET AndroidGraphicsLayer)
+    target_link_libraries(${VULKAN_GL_TGT_NAME} PUBLIC AndroidGraphicsLayer)
+    target_compile_definitions(${VULKAN_GL_TGT_NAME} PRIVATE -DVGL_USE_SWAPPY=1)
+endif()

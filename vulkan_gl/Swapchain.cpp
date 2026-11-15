@@ -3,6 +3,7 @@
 #include "DeviceSurfaceCaps.h"
 #include "Finally.h"
 #include "LogicalDevice.h"
+#include "PhysicalDevice.h"
 #include "Semaphore.h"
 #include "Utils.h"
 #include "VkFuncs.h"
@@ -10,6 +11,10 @@
 #include "WindowSurface.h"
 
 #include <SDL_vulkan.h>
+
+#if VGL_USE_SWAPPY
+    #include "SwappyVkController.h"
+#endif
 
 BEGIN_NAMESPACE(vgl)
 
@@ -110,6 +115,12 @@ bool Swapchain::init(
         return false;
     }
 
+    #if VGL_USE_SWAPPY
+        // Android frame pacing (Swappy, with the launcher's settings): from now on 'presentAcquiredImage' presents through it,
+        // which waits for the vsync the frame is due at instead of queueing frames as fast as they are made. FIFO only.
+        SwappyVkController_InitSwapchain(device.getPhysicalDevice()->getVkPhysicalDevice(), device.getVkDevice(), mVkSwapchain, mPresentMode);
+    #endif
+
     // All went well if we got to here!
     mbIsValid = true;
     mGeneration = ++gSwapchainGenerationCounter;
@@ -144,6 +155,11 @@ void Swapchain::destroy(const bool bForceIfInvalid) noexcept {
 
     if (mVkSwapchain) {
         ASSERT(mpDevice && mpDevice->getVkDevice());
+
+        #if VGL_USE_SWAPPY
+            SwappyVkController_DestroySwapchain(mpDevice->getVkDevice(), mVkSwapchain);
+        #endif
+
         const VkFuncs& vkFuncs = mpDevice->getVkFuncs();
         vkFuncs.vkDestroySwapchainKHR(mpDevice->getVkDevice(), mVkSwapchain, nullptr);
         mVkSwapchain = VK_NULL_HANDLE;
@@ -198,7 +214,16 @@ bool Swapchain::presentAcquiredImage(const Semaphore& renderFinishedSemaphore) n
 
     // Check the result and clear the acquired image - recreate the swap chain later if it fails or is suboptimal
     const VkFuncs& vkFuncs = mpDevice->getVkFuncs();
-    const VkResult queuePresentResult = vkFuncs.vkQueuePresentKHR(mpDevice->getPresentationQueue(), &presentInfo);
+    VkResult queuePresentResult = VK_SUCCESS;
+
+    #if VGL_USE_SWAPPY
+        // Android frame pacing: Swappy presents the image when it paces this swapchain (see 'init')
+        if (!SwappyVkController_QueuePresent(mpDevice->getPresentationQueue(), &presentInfo, &queuePresentResult))
+    #endif
+    {
+        queuePresentResult = vkFuncs.vkQueuePresentKHR(mpDevice->getPresentationQueue(), &presentInfo);
+    }
+
     mAcquiredImageIdx = INVALID_IMAGE_IDX;
 
     if (queuePresentResult == VK_SUCCESS) {
