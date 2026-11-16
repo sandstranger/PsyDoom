@@ -200,17 +200,7 @@ static void decideDrawSampleCount() noexcept {
         deviceMsaaModes &= (formatQueryResult == VK_SUCCESS) ? drawFormatProps.sampleCounts : (VkSampleCountFlags) VK_SAMPLE_COUNT_1_BIT;
     }
 
-    // Every Android GPU renders in tiles: the samples of the tile being rendered live in on-chip tile memory, which is what makes MSAA
-    // cheap there. The hardware resolves them as the tiles are written out, into the frame history and the swapchain image, so the samples
-    // are all the tile holds: 4x MSAA of 32-bit color is 128 bits per pixel, what Mali has at full tile size (Bifrost, Valhall up to
-    // G57/G7x). 8x/16x MSAA is not cheap on any mobile tiler (smaller tiles), so whatever the hardware allows is used, up to 4x at most.
-    {
-        constexpr uint32_t MAX_SAMPLES = 4;
-        static_assert((MAX_SAMPLES >= 1) && ((MAX_SAMPLES & (MAX_SAMPLES - 1)) == 0));
-
-        // Note: VK_SAMPLE_COUNT_N_BIT == N, so this keeps the bits for 1..MAX_SAMPLES samples
-        deviceMsaaModes &= (VkSampleCountFlags)((MAX_SAMPLES << 1) - 1);
-    }
+    // No cap of our own: the requested count is used up to the most the driver allows for that attachment
 #endif
 
     if ((wantedNumSamples >= 64) && (deviceMsaaModes & VK_SAMPLE_COUNT_64_BIT)) {
