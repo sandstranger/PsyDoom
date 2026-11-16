@@ -156,6 +156,7 @@ vgl::PipelineDepthStencilState gDepthState_disabled;        // No depth/stencil 
 // The pipelines themselves
 VPipelineSet<VPipelineType_Main>            gPipelines_Main_NoGammaAdjust;
 VPipelineSet<VPipelineType_Main>            gPipelines_Main_GammaAdjust;
+VPipelineSet<VPipelineType_Main>            gPipelines_Main_SwapchainResolve;
 VPipelineSet<VPipelineType_Crossfade>       gPipelines_Crossfade;
 VPipelineSet<VPipelineType_LoadingPlaque>   gPipelines_LoadingPlaque;
 VPipelineSet<VPipelineType_PSX>             gPipelines_PSX;
@@ -678,7 +679,8 @@ static void initPipelineSet_Main(
     VPipelineSet<VPipelineType_Main>& pipelineSet,
     const vgl::RenderPass& renderPass,
     const uint32_t numSamples,
-    const bool bGammaAdjusted
+    const bool bGammaAdjusted,
+    const bool bShaderMsaaResolve
 ) noexcept {
     // Create all of the main drawing pipelines
     initDrawPipeline(pipelineSet.get(VPipelineType_Main::Lines), renderPass,
@@ -738,11 +740,11 @@ static void initPipelineSet_Main(
         gShaders_sky, gInputAS_triList, gRasterState_backFaceCull, gBlendState_noBlend, gDepthState_disabled, false, true, true
     );
 
-    // The pipeline to resolve MSAA: only bother creating this if we are doing MSAA.
+    // The pipeline to resolve MSAA: only bother creating this if we are doing MSAA resolved by a shader (not by the hardware).
     // Specialize the shader to the number of samples also, so that loops can be unrolled.
-    const bool bUsingMsaa = (numSamples > 1);
-    
-    if (bUsingMsaa) {
+    ASSERT((!bShaderMsaaResolve) || (numSamples > 1));
+
+    if (bShaderMsaaResolve) {
         const VkSpecializationMapEntry specializationMapEntries[] = {
             { 0, 0, sizeof(uint32_t) }
         };
@@ -766,7 +768,7 @@ static void initPipelineSet_Main(
     // Only define this for the gamma adjusted render pass.
     if (bGammaAdjusted) {
         initPipeline(
-            pipelineSet.get(VPipelineType_Main::GammaAdjustPostProcess), renderPass, (bUsingMsaa) ? 2 : 1, // Subpass index = 2 or 1 (depending on MSAA setting)
+            pipelineSet.get(VPipelineType_Main::GammaAdjustPostProcess), renderPass, (bShaderMsaaResolve) ? 2 : 1, // Subpass index = 2 or 1 (after the resolve subpass, if any)
             gShaders_gammaAdjustPostProcess, nullptr, gPipelineLayout_postProcess1Tex,
             gVertexBindingDesc_xyUv, gVertexAttribs_xyUv, C_ARRAY_SIZE(gVertexAttribs_xyUv),
             gInputAS_triList, gRasterState_noCull,
@@ -877,8 +879,15 @@ void initPipelines(
     const uint32_t numSamples
 ) noexcept
 {
-    initPipelineSet_Main(gPipelines_Main_NoGammaAdjust, mainRPath.getRenderPass_NoGammaAdjust(), numSamples, false);
-    initPipelineSet_Main(gPipelines_Main_GammaAdjust, mainRPath.getRenderPass_GammaAdjust(), numSamples, true);
+    const bool bShaderMsaaResolve = ((numSamples > 1) && (!mainRPath.usesHardwareMsaaResolve()));
+    initPipelineSet_Main(gPipelines_Main_NoGammaAdjust, mainRPath.getRenderPass_NoGammaAdjust(), numSamples, false, bShaderMsaaResolve);
+    initPipelineSet_Main(gPipelines_Main_GammaAdjust, mainRPath.getRenderPass_GammaAdjust(), numSamples, true, bShaderMsaaResolve);
+
+    // MSAA resolved by the hardware straight into the swapchain image: another render pass (its second subpass draws nothing)
+    if (mainRPath.canResolveToSwapchain()) {
+        initPipelineSet_Main(gPipelines_Main_SwapchainResolve, mainRPath.getRenderPass_SwapchainResolve(), numSamples, false, false);
+    }
+
     initPipelineSet_Crossfade(gPipelines_Crossfade, crossfadeRPath.getRenderPass());
     initPipelineSet_LoadingPlaque(gPipelines_LoadingPlaque, loadingPlaqueRPath.getRenderPass());
     initPipelineSet_PSX(gPipelines_PSX, psxRPath.getRenderPass());
@@ -891,6 +900,7 @@ void shutdown() noexcept {
     destroyPipelineSet(gPipelines_PSX);
     destroyPipelineSet(gPipelines_LoadingPlaque);
     destroyPipelineSet(gPipelines_Crossfade);
+    destroyPipelineSet(gPipelines_Main_SwapchainResolve);
     destroyPipelineSet(gPipelines_Main_GammaAdjust);
     destroyPipelineSet(gPipelines_Main_NoGammaAdjust);
 
@@ -936,10 +946,12 @@ void shutdown() noexcept {
 
 //------------------------------------------------------------------------------------------------------------------------------------------
 // Gets which pipeline set to use for the main renderpass for the current frame.
-// The active set varies depending on whether gamma adjustment is in use or not.
+// The active set varies depending on whether gamma adjustment is in use or not, or MSAA is resolved into the swapchain image.
 //------------------------------------------------------------------------------------------------------------------------------------------
 const VPipelineSet<VPipelineType_Main>& getMainPipelineSet() noexcept {
-    if (VRenderer::gbUsingGammaAdjustThisFrame) {
+    if (VRenderer::gbResolveToSwapchainThisFrame) {
+        return VPipelines::gPipelines_Main_SwapchainResolve;
+    } else if (VRenderer::gbUsingGammaAdjustThisFrame) {
         return VPipelines::gPipelines_Main_GammaAdjust;
     } else {
         return VPipelines::gPipelines_Main_NoGammaAdjust;

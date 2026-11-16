@@ -123,6 +123,10 @@ vgl::CmdBufferRecorder gCmdBufferRec(gVkFuncs);
 // This can only be changed prior to the start of the frame, since different render passes are used for the gamma and non-gamma adjusted cases.
 bool gbUsingGammaAdjustThisFrame = false;
 
+// Whether the main render path resolves MSAA straight into the swapchain image this frame (hardware resolve, Android).
+// Never set together with 'gbUsingGammaAdjustThisFrame': a different render pass again.
+bool gbResolveToSwapchainThisFrame = false;
+
 // A 1D texture used for doing gamma adjustments.
 // The original color component is used to do lookup into the LUT and the output is the gamma adjusted value.
 vgl::Texture gGammaAdjustTex;
@@ -177,18 +181,18 @@ static void decideDrawSampleCount() noexcept {
 
 #ifdef ANDROID
     // The real limit of the attachment that is multisampled: 'framebufferColorSampleCounts' is only the generic one for color attachments,
-    // the counts for a given format and usage can be lower. That attachment is the draw color attachment, always 'COLOR_32_FORMAT' on
-    // Android (see 'determine16BitColorSupport'), used as a transient color + input attachment (read by the resolve subpass).
+    // the counts for a given format and usage can be lower. That attachment is the draw color attachment, in the swapchain's format on
+    // Android (see 'init'), used as a transient color attachment only: the hardware resolves it (see 'VRenderPath_Main::init').
     {
         const vgl::VkFuncs& vkFuncs = gpPhysicalDevice->getVkFuncs();
         VkImageFormatProperties drawFormatProps = {};
 
         const VkResult formatQueryResult = vkFuncs.vkGetPhysicalDeviceImageFormatProperties(
             gpPhysicalDevice->getVkPhysicalDevice(),
-            COLOR_32_FORMAT,
+            gPresentSurfaceFormat,
             VK_IMAGE_TYPE_2D,
             VK_IMAGE_TILING_OPTIMAL,
-            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT,
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT,
             0,
             &drawFormatProps
         );
@@ -197,10 +201,9 @@ static void decideDrawSampleCount() noexcept {
     }
 
     // Every Android GPU renders in tiles: the samples of the tile being rendered live in on-chip tile memory, which is what makes MSAA
-    // cheap there. 8x/16x MSAA is not cheap on any mobile tiler though (much smaller tiles, the resolve subpass reading 8+ samples per
-    // pixel), so whatever the hardware allows is used, up to 4x at most. Note that at 4x the samples (4 * 32 bits) plus the 1x resolve
-    // attachment and the swapchain image exceed the 128 bits per pixel Mali has at full tile size (Bifrost, Valhall up to G57/G7x), so
-    // the tiles get smaller there: it costs some performance, 2x fits in full size tiles.
+    // cheap there. The hardware resolves them as the tiles are written out, into the frame history and the swapchain image, so the samples
+    // are all the tile holds: 4x MSAA of 32-bit color is 128 bits per pixel, what Mali has at full tile size (Bifrost, Valhall up to
+    // G57/G7x). 8x/16x MSAA is not cheap on any mobile tiler (smaller tiles), so whatever the hardware allows is used, up to 4x at most.
     {
         constexpr uint32_t MAX_SAMPLES = 4;
         static_assert((MAX_SAMPLES >= 1) && ((MAX_SAMPLES & (MAX_SAMPLES - 1)) == 0));
@@ -666,10 +669,11 @@ void init() noexcept {
         );
     }
 
-    // Decide whether 16-bit color is possible, draw sample count and window/present surface format
+    // Decide the window/present surface format, draw sample count and whether 16-bit color is possible.
+    // Note: the present format comes first, the draw color attachment has that format on Android.
+    decidePresentSurfaceFormat();
     decideDrawSampleCount();
     determine16BitColorSupport(*gpPhysicalDevice);
-    decidePresentSurfaceFormat();
 
     // Initialize the logical Vulkan device used for commands and operations and then 
     if (!gDevice.init(*gpPhysicalDevice, &gWindowSurface))
@@ -678,12 +682,21 @@ void init() noexcept {
     // Initialize all pipeline components: must be done BEFORE creating render paths, as they rely on some components
     VPipelines::initPipelineComponents(gDevice, gDrawSampleCount);
 
-    // Initialize all render paths
+    // Initialize all render paths.
+    // Android: the draw color attachment and the MSAA resolve attachment (the frame history) have the swapchain's format, which is a
+    // 32-bit one too (see 'ALLOWED_COLOR_SURFACE_FORMATS'): the hardware resolves the samples into both of them and the swapchain image
+    // as the tiles are written out, and a resolve keeps the format.
+#ifdef ANDROID
+    const VkFormat drawColorFormat = gPresentSurfaceFormat;
+    const VkFormat resolveFormat = gPresentSurfaceFormat;
+#else
     const VkFormat drawColorFormat = (Config::gbUseVulkan32BitShading || (!gbCanVulkanFbUse16BitColor)) ? COLOR_32_FORMAT : COLOR_16_FORMAT;
+    const VkFormat resolveFormat = COLOR_32_FORMAT;
+#endif
     const VkFormat psxFramebufferFormat = (gbCanPsxFbUse16BitColor) ? COLOR_16_FORMAT : COLOR_32_FORMAT;
 
     gRenderPath_Psx.init(gDevice, gSwapchain, psxFramebufferFormat, gPresentSurfaceFormat);
-    gRenderPath_Main.init(gDevice, gSwapchain, gDrawSampleCount, drawColorFormat, COLOR_32_FORMAT, gPresentSurfaceFormat);
+    gRenderPath_Main.init(gDevice, gSwapchain, gDrawSampleCount, drawColorFormat, resolveFormat, gPresentSurfaceFormat);
     gRenderPath_Crossfade.init(gDevice, gSwapchain, gPresentSurfaceFormat, gRenderPath_Main);
     gRenderPath_LoadingPlaque.init(gDevice, gSwapchain, gPresentSurfaceFormat);
     gRenderPath_Blit.init(gDevice);
@@ -847,6 +860,7 @@ bool beginFrame() noexcept {
 #endif    
     gbDidBeginFrame = true;
     gbUsingGammaAdjustThisFrame = PlayerPrefs::isUsingGammaAdjust();
+    gbResolveToSwapchainThisFrame = false;
 
     // Do a render path switch if requested
     gpCurRenderPath = gpNextRenderPath;
@@ -856,13 +870,18 @@ bool beginFrame() noexcept {
         return false;
 
 #ifdef ANDROID
-    // Tile based GPUs: the main render path writes the swapchain image from tile memory in the render pass's last subpass (the gamma
-    // adjust one, with the identity LUT at the default gamma) instead of storing the frame and copying it with a blit afterwards: no
-    // separate transfer pass reading the whole frame back. Only when the frame is the swapchain's size: that subpass does not scale.
+    // Tile based GPUs: the main render path writes the swapchain image from tile memory in the render pass instead of storing the frame
+    // and copying it with a blit afterwards: no separate transfer pass reading the whole frame back. With MSAA the hardware resolves the
+    // samples straight into it as the tiles are written out, without MSAA the gamma adjust subpass writes it (with the identity LUT at
+    // the default gamma). Only when the frame is the swapchain's size: neither scales.
     if ((!gbUsingGammaAdjustThisFrame) && (gpCurRenderPath == &gRenderPath_Main) &&
         (gFramebufferW == gSwapchain.getSwapExtentWidth()) && (gFramebufferH == gSwapchain.getSwapExtentHeight())
     ) {
-        gbUsingGammaAdjustThisFrame = true;
+        if (gRenderPath_Main.canResolveToSwapchain()) {
+            gbResolveToSwapchainThisFrame = true;
+        } else {
+            gbUsingGammaAdjustThisFrame = true;
+        }
     }
 #endif
 

@@ -32,6 +32,10 @@ static_assert(alignof(ComparableVkSubpassDependency) == alignof(VkSubpassDepende
 //  about how to block with respect to stuff outside of it. Rather than blocking on everything (which is the only real option available)
 //  and potentially affecting the ability of render passes to process in parallel, it is instead up to external code to handle the
 //  synchronization of all attachments added as input to the render pass.
+//
+//  The dependencies are 'by region' (framebuffer-local): a subpass only ever accesses the attachments of earlier subpasses at its own
+//  pixel (as color, depth stencil, resolve or input attachments). Without that flag a dependency covers the whole framebuffer, which
+//  stops a tile based GPU from merging the subpasses: each would be a render pass of its own, its attachments written out and read back.
 //------------------------------------------------------------------------------------------------------------------------------------------
 static uint32_t determineSubpassDependencies(
     const uint32_t subpassIdx,
@@ -56,6 +60,7 @@ static uint32_t determineSubpassDependencies(
         // Fill in destination subpass portions of the dependency.
         // The stage that is blocked and operations that are blocked:
         ComparableVkSubpassDependency dependency = {};
+        dependency.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;   // Attachments: the same pixel only, see the note above
         dependency.dstSubpass = subpassIdx;
         dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
         dependency.dstAccessMask = (
@@ -111,6 +116,7 @@ static uint32_t determineSubpassDependencies(
         // Fill in destination subpass portions of the dependency.
         // The stage that is blocked and operations that are blocked:
         ComparableVkSubpassDependency dependency = {};
+        dependency.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;   // Attachments: the same pixel only, see the note above
         dependency.dstSubpass = subpassIdx;
         dependency.dstStageMask = (
             VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
@@ -172,6 +178,7 @@ static uint32_t determineSubpassDependencies(
         // Fill in destination subpass portions of the dependency; the stage that is blocked and operations that are blocked.
         // Block color attachment reads in the fragment shader, and also block writes if the attachment is being modified.
         ComparableVkSubpassDependency dependency = {};
+        dependency.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;   // Attachments: the same pixel only, see the note above
         dependency.dstSubpass = subpassIdx;
         dependency.dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
         dependency.dstAccessMask = VK_ACCESS_INPUT_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;

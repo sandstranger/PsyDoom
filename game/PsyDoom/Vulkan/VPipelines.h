@@ -58,6 +58,7 @@ extern vgl::PipelineLayout          gPipelineLayout_crossfadeGamma;
 
 extern VPipelineSet<VPipelineType_Main>             gPipelines_Main_NoGammaAdjust;
 extern VPipelineSet<VPipelineType_Main>             gPipelines_Main_GammaAdjust;
+extern VPipelineSet<VPipelineType_Main>             gPipelines_Main_SwapchainResolve;
 extern VPipelineSet<VPipelineType_Crossfade>        gPipelines_Crossfade;
 extern VPipelineSet<VPipelineType_LoadingPlaque>    gPipelines_LoadingPlaque;
 extern VPipelineSet<VPipelineType_PSX>              gPipelines_PSX;

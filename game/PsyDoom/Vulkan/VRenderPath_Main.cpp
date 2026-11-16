@@ -27,11 +27,14 @@ VRenderPath_Main::VRenderPath_Main() noexcept
     , mPresentFormat{}
     , mRenderPass_NoGammaAdjust()
     , mRenderPass_GammaAdjust()
+    , mRenderPass_SwapchainResolve()
+    , mbHardwareMsaaResolve(false)
     , mMsaaResolver()
     , mDrawColorAttachments{}
     , mbRenderedToDrawColorAttachments{}
     , mFramebuffers_NoGammaAdjust{}
     , mFramebuffers_GammaAdjust()
+    , mFramebuffers_SwapchainResolve()
     , mGammaAdjustDescriptorPool()
     , mpGammaAdjustDescriptorSets{}
     , mScreenQuad()
@@ -68,12 +71,29 @@ void VRenderPath_Main::init(
     mResolveFormat = resolveFormat;
     mPresentFormat = presentFormat;
 
+    // Tile based GPUs (Android): MSAA is resolved by the hardware as the tiles are written out (pResolveAttachments), so the samples
+    // are the only thing in tile memory: 4x MSAA of 32-bit color is 128 bits per pixel, which Mali (Bifrost, Valhall up to G57/G7x)
+    // holds at full tile size. A resolve subpass with a shader kept the samples, the resolve attachment and the swapchain image in
+    // the tile at once (192 bits at 4x: smaller tiles). A hardware resolve needs the format of the samples for the resolve target;
+    // the other builds may draw in 16-bit color and resolve to 32-bit, which only the shader can do, so they keep it.
+#if ANDROID
+    mbHardwareMsaaResolve = ((numDrawSamples > 1) && (colorFormat == resolveFormat));
+#else
+    mbHardwareMsaaResolve = false;
+#endif
+
     // Create the render passes and the MSAA resolver if we are doing multi-sampling
-    if (!initRenderPass(mRenderPass_NoGammaAdjust, false))
+    if (!initRenderPass(mRenderPass_NoGammaAdjust, false, false))
         FatalErrors::raise("Main render path: failed to create a Vulkan renderpass! (without gamma adjustment)");
-        
-    if (!initRenderPass(mRenderPass_GammaAdjust, true))
+
+    if (!initRenderPass(mRenderPass_GammaAdjust, true, false))
         FatalErrors::raise("Main render path: failed to create a Vulkan renderpass! (with gamma adjustment)");
+
+    // Hardware resolve straight into the swapchain image too, which must have the format of the samples
+    if (mbHardwareMsaaResolve && (colorFormat == presentFormat)) {
+        if (!initRenderPass(mRenderPass_SwapchainResolve, false, true))
+            FatalErrors::raise("Main render path: failed to create a Vulkan renderpass! (MSAA resolved into the swapchain image)");
+    }
 
     if (mNumDrawSamples > 1) {
         mMsaaResolver.init(device);
@@ -115,6 +135,12 @@ void VRenderPath_Main::destroy() noexcept {
     
     mFramebuffers_GammaAdjust.clear();
 
+    for (vgl::Framebuffer& framebuffer : mFramebuffers_SwapchainResolve) {
+        framebuffer.destroy(true);
+    }
+
+    mFramebuffers_SwapchainResolve.clear();
+
     for (uint32_t i = 0; i < vgl::Defines::RINGBUFFER_SIZE; ++i) {
         mFramebuffers_NoGammaAdjust[i].destroy(true);
         mbRenderedToDrawColorAttachments[i] = false;
@@ -122,8 +148,10 @@ void VRenderPath_Main::destroy() noexcept {
     }
 
     mMsaaResolver.destroy();
+    mRenderPass_SwapchainResolve.destroy();
     mRenderPass_GammaAdjust.destroy();
     mRenderPass_NoGammaAdjust.destroy();
+    mbHardwareMsaaResolve = false;
     mResolveFormat = {};
     mColorFormat = {};
     mNumDrawSamples = 0;
@@ -170,16 +198,20 @@ bool VRenderPath_Main::ensureValidFramebuffers(
         attachment.destroy(bDestroyImmediate);
         mbRenderedToDrawColorAttachments[i] = false;
         
-        VkImageUsageFlags colorAttachUsage = VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+        VkImageUsageFlags colorAttachUsage = 0;
 
         if (!bUsingMsaa) {
-            // Kept as the previous frame for crossfades and the loading plaque (sampled), or blitted to the swapchain
-            colorAttachUsage |= VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+            // Kept as the previous frame for crossfades and the loading plaque (sampled), or blitted to the swapchain.
+            // Read by the gamma adjust subpass as an input attachment.
+            colorAttachUsage = VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        } else if (mbHardwareMsaaResolve) {
+            // With MSAA the samples never leave tile memory: a transient attachment, which tile based GPUs back with lazily allocated
+            // memory (no physical memory for the samples at all). The hardware resolves them as the tiles are written out, it is only
+            // ever a color attachment. The frame history for crossfades etc. is the resolve attachment.
+            colorAttachUsage = VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
         } else {
-            // With MSAA the samples are only ever read by the resolve subpass, in tile memory, and never stored: a transient
-            // attachment, which tile based GPUs back with lazily allocated memory (no physical memory for the samples at all).
-            // The frame history for crossfades etc. is the resolve attachment.
-            colorAttachUsage |= VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+            // The same, but the samples are read by the shader of the resolve subpass, in tile memory
+            colorAttachUsage = VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
         }
 
         if (!attachment.initAsRenderTexture(device, true, mColorFormat, colorAttachUsage, fbWidth, fbHeight, mNumDrawSamples))
@@ -197,8 +229,8 @@ bool VRenderPath_Main::ensureValidFramebuffers(
         }
     }
     
-    // Need to set the input attachments for the MSAA resolver after recreating the draw color attachments
-    if (bUsingMsaa && bRecreatedDrawColorAttachments) {
+    // Need to set the input attachments for the MSAA resolver after recreating the draw color attachments (its shader resolves them)
+    if (bUsingMsaa && (!mbHardwareMsaaResolve) && bRecreatedDrawColorAttachments) {
         mMsaaResolver.setInputAttachments(mDrawColorAttachments);
     }
     
@@ -215,43 +247,6 @@ bool VRenderPath_Main::ensureValidFramebuffers(
                 bValidFrameBuffers_NoGammaAdjust = false;
                 break;
             }
-        }
-    }
-    
-    // Check to see if all framebuffers (for the gamma adjustment case) are valid.
-    // Note: if we have recreated color or MSAA attachments then they are automatically invalid.
-    const uint32_t swapchainLength = swapchain.getLength();
-    const uint32_t numGammaAdjustFramebuffers = swapchainLength * vgl::Defines::RINGBUFFER_SIZE;
-    
-    bool bValidFrameBuffers_GammaAdjust = (
-        (!bRecreatedDrawColorAttachments) &&
-        (!bRecreatedMsaaResolveAttachments) &&
-        (numGammaAdjustFramebuffers == mFramebuffers_GammaAdjust.size())
-    );
-    
-    if (bValidFrameBuffers_GammaAdjust) {
-        // Which attachment is the swapchain attachment in the framebuffer?
-        const uint32_t swapAttachmentIdx = (bUsingMsaa) ? 2u : 1u;
-        
-        for (uint32_t swapchainIdx = 0; swapchainIdx < swapchainLength; ++swapchainIdx) {
-            for (uint32_t ringbufferIdx = 0; ringbufferIdx < vgl::Defines::RINGBUFFER_SIZE; ++ringbufferIdx) {
-                const uint32_t framebufferIdx = swapchainIdx * vgl::Defines::RINGBUFFER_SIZE + ringbufferIdx;
-                vgl::Framebuffer& framebuffer = mFramebuffers_GammaAdjust[framebufferIdx];
-                
-                bValidFrameBuffers_GammaAdjust = (
-                    framebuffer.isValid() &&
-                    framebuffer.isForSwapchain(swapchain) &&
-                    (swapAttachmentIdx < framebuffer.getAttachmentImages().size()) &&
-                    (swapchainIdx < swapchain.getLength()) &&
-                    (framebuffer.getAttachmentImages()[swapAttachmentIdx] == swapchain.getVkImages()[swapchainIdx])
-                );
-                
-                if (!bValidFrameBuffers_GammaAdjust)
-                    break;
-            }
-            
-            if (!bValidFrameBuffers_GammaAdjust)
-                break;
         }
     }
     
@@ -274,35 +269,82 @@ bool VRenderPath_Main::ensureValidFramebuffers(
         }
     }
 
-    // Recreate the framebuffers used for the gamma adjusted case, if required
-    if (!bValidFrameBuffers_GammaAdjust) {
-        // First tear down the original framebuffers
-        for (vgl::Framebuffer& framebuffer : mFramebuffers_GammaAdjust) {
-            framebuffer.destroy(bDestroyImmediate);
+    // Recreate the framebuffers of the render passes writing the swapchain image (gamma adjust, MSAA resolved into it), if required.
+    // Note: if we have recreated color or MSAA attachments then they are automatically invalid.
+    const bool bRecreatedAttachments = (bRecreatedDrawColorAttachments || bRecreatedMsaaResolveAttachments);
+
+    if (!initSwapchainFramebuffers(mFramebuffers_GammaAdjust, mRenderPass_GammaAdjust, swapchain, bRecreatedAttachments, bDestroyImmediate))
+        return false;
+
+    if (canResolveToSwapchain()) {
+        if (!initSwapchainFramebuffers(mFramebuffers_SwapchainResolve, mRenderPass_SwapchainResolve, swapchain, bRecreatedAttachments, bDestroyImmediate))
+            return false;
+    }
+
+    return true;
+}
+
+//------------------------------------------------------------------------------------------------------------------------------------------
+// Makes sure the framebuffers of a render pass writing the swapchain image are valid, recreating them if required.
+// There is one per swapchain image and ringbuffer slot, arranged as [SwapchainSize][RINGBUFFER_SIZE]. The attachments are the draw
+// color attachment, the MSAA resolve attachment (if doing MSAA) and the swapchain image.
+//------------------------------------------------------------------------------------------------------------------------------------------
+bool VRenderPath_Main::initSwapchainFramebuffers(
+    std::vector<vgl::Framebuffer>& framebuffers,
+    const vgl::RenderPass& renderPass,
+    vgl::Swapchain& swapchain,
+    const bool bForceRecreate,
+    const bool bDestroyImmediate
+) noexcept {
+    const bool bUsingMsaa = (mNumDrawSamples > 1);
+    const uint32_t swapchainLength = swapchain.getLength();
+    const uint32_t numFramebuffers = swapchainLength * vgl::Defines::RINGBUFFER_SIZE;
+    const uint32_t swapAttachmentIdx = (bUsingMsaa) ? 2u : 1u;  // Which attachment is the swapchain image
+
+    // Are the existing framebuffers still valid?
+    bool bValidFramebuffers = ((!bForceRecreate) && (framebuffers.size() == numFramebuffers));
+
+    for (uint32_t swapchainIdx = 0; bValidFramebuffers && (swapchainIdx < swapchainLength); ++swapchainIdx) {
+        for (uint32_t ringbufferIdx = 0; bValidFramebuffers && (ringbufferIdx < vgl::Defines::RINGBUFFER_SIZE); ++ringbufferIdx) {
+            const vgl::Framebuffer& framebuffer = framebuffers[swapchainIdx * vgl::Defines::RINGBUFFER_SIZE + ringbufferIdx];
+
+            bValidFramebuffers = (
+                framebuffer.isValid() &&
+                framebuffer.isForSwapchain(swapchain) &&
+                (swapAttachmentIdx < framebuffer.getAttachmentImages().size()) &&
+                (framebuffer.getAttachmentImages()[swapAttachmentIdx] == swapchain.getVkImages()[swapchainIdx])
+            );
         }
-        
-        mFramebuffers_GammaAdjust.clear();
-        mFramebuffers_GammaAdjust.resize(numGammaAdjustFramebuffers);
-    
-        // Now recreate the frame buffers
-        for (uint32_t swapchainIdx = 0; swapchainIdx < swapchainLength; ++swapchainIdx) {
-            for (uint32_t ringbufferIdx = 0; ringbufferIdx < vgl::Defines::RINGBUFFER_SIZE; ++ringbufferIdx) {
-                const uint32_t framebufferIdx = swapchainIdx * vgl::Defines::RINGBUFFER_SIZE + ringbufferIdx;
-                vgl::Framebuffer& framebuffer = mFramebuffers_GammaAdjust[framebufferIdx];
-                
-                std::vector<const vgl::BaseTexture*> fbAttachments;
-                fbAttachments.reserve(2);
-                fbAttachments.push_back(&mDrawColorAttachments[ringbufferIdx]);
-                
-                if (bUsingMsaa) {
-                    fbAttachments.push_back(&mMsaaResolver.getResolveAttachment(ringbufferIdx));
-                }
-                
-                const uint32_t swapImgAttachIdx = (uint32_t) fbAttachments.size(); // Index of the swapchain image attachment
-                
-                if (!framebuffer.init(mRenderPass_GammaAdjust, swapchain, swapchainIdx, swapImgAttachIdx, fbAttachments))
-                    return false;
+    }
+
+    if (bValidFramebuffers)
+        return true;
+
+    // First tear down the original framebuffers
+    for (vgl::Framebuffer& framebuffer : framebuffers) {
+        framebuffer.destroy(bDestroyImmediate);
+    }
+
+    framebuffers.clear();
+    framebuffers.resize(numFramebuffers);
+
+    // Now recreate them
+    for (uint32_t swapchainIdx = 0; swapchainIdx < swapchainLength; ++swapchainIdx) {
+        for (uint32_t ringbufferIdx = 0; ringbufferIdx < vgl::Defines::RINGBUFFER_SIZE; ++ringbufferIdx) {
+            vgl::Framebuffer& framebuffer = framebuffers[swapchainIdx * vgl::Defines::RINGBUFFER_SIZE + ringbufferIdx];
+
+            std::vector<const vgl::BaseTexture*> fbAttachments;
+            fbAttachments.reserve(2);
+            fbAttachments.push_back(&mDrawColorAttachments[ringbufferIdx]);
+
+            if (bUsingMsaa) {
+                fbAttachments.push_back(&mMsaaResolver.getResolveAttachment(ringbufferIdx));
             }
+
+            const uint32_t swapImgAttachIdx = (uint32_t) fbAttachments.size();  // Index of the swapchain image attachment
+
+            if (!framebuffer.init(renderPass, swapchain, swapchainIdx, swapImgAttachIdx, fbAttachments))
+                return false;
         }
     }
 
@@ -318,11 +360,12 @@ void VRenderPath_Main::beginFrame(vgl::Swapchain& swapchain, vgl::CmdBufferRecor
     ASSERT(mpDevice && mpDevice->isValid());
     ASSERT(swapchain.isValid());
 
-    // If not doing gamma adjustment we need transition the swapchain image in preparation for blitting
+    // If the render pass doesn't write the swapchain image (gamma adjust, MSAA resolved into it) we need transition the swapchain image
+    // in preparation for blitting.
     const uint32_t swapchainIdx = swapchain.getAcquiredImageIdx();
     ASSERT(swapchainIdx < swapchain.getLength());
 
-    if (!VRenderer::gbUsingGammaAdjustThisFrame) {
+    if ((!VRenderer::gbUsingGammaAdjustThisFrame) && (!VRenderer::gbResolveToSwapchainThisFrame)) {
         VkImageMemoryBarrier imgBarrier = {};
         imgBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         imgBarrier.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
@@ -365,13 +408,17 @@ void VRenderPath_Main::endFrame(vgl::Swapchain& swapchain, vgl::CmdBufferRecorde
     const uint32_t ringbufferIdx = device.getRingbufferMgr().getBufferIndex();
     const uint32_t swapchainIdx = swapchain.getAcquiredImageIdx();
 
-    const vgl::RenderPass& renderPass = (VRenderer::gbUsingGammaAdjustThisFrame) ?
-        mRenderPass_GammaAdjust :
-        mRenderPass_NoGammaAdjust;
+    // MSAA resolved by the hardware into the frame history and the swapchain image, gamma adjusted into the swapchain image, or blitted to it
+    const bool bResolveToSwapchain = VRenderer::gbResolveToSwapchainThisFrame;
+    const bool bGammaAdjust = VRenderer::gbUsingGammaAdjustThisFrame;
+    const uint32_t swapchainFramebufferIdx = swapchainIdx * vgl::Defines::RINGBUFFER_SIZE + ringbufferIdx;
+    ASSERT((!bResolveToSwapchain) || (canResolveToSwapchain() && (!bGammaAdjust)));
 
-    const vgl::Framebuffer& framebuffer = (VRenderer::gbUsingGammaAdjustThisFrame) ?
-        mFramebuffers_GammaAdjust[swapchainIdx * vgl::Defines::RINGBUFFER_SIZE + ringbufferIdx] :
-        mFramebuffers_NoGammaAdjust[ringbufferIdx];
+    const vgl::RenderPass& renderPass = (bResolveToSwapchain) ? mRenderPass_SwapchainResolve :
+        (bGammaAdjust) ? mRenderPass_GammaAdjust : mRenderPass_NoGammaAdjust;
+
+    const vgl::Framebuffer& framebuffer = (bResolveToSwapchain) ? mFramebuffers_SwapchainResolve[swapchainFramebufferIdx] :
+        (bGammaAdjust) ? mFramebuffers_GammaAdjust[swapchainFramebufferIdx] : mFramebuffers_NoGammaAdjust[ringbufferIdx];
 
     // Begin the main render pass if we are not skipping drawing.
     // Note that we don't do any drawing at all if we are skipping presenting this frame.
@@ -403,16 +450,21 @@ void VRenderPath_Main::endFrame(vgl::Swapchain& swapchain, vgl::CmdBufferRecorde
     VDrawing::endFrame(cmdRec, bRenderThisFrame);
 
     if (bRenderThisFrame) {
-        // Do an MSAA resolve subpass if MSAA is enabled
+        // Do an MSAA resolve subpass if MSAA is enabled and resolved by a shader.
+        // A hardware resolve happens at the end of the draw subpass, into the frame history.
         const bool bUsingMsaa = (mNumDrawSamples > 1);
 
-        if (bUsingMsaa) {
+        if (bUsingMsaa && (!mbHardwareMsaaResolve)) {
             cmdRec.nextSubpass(VK_SUBPASS_CONTENTS_INLINE);
             mMsaaResolver.resolve(cmdRec);
         }
 
-        // If doing gamma adjust then handle that now
-        if (VRenderer::gbUsingGammaAdjustThisFrame) {
+        if (bResolveToSwapchain) {
+            // Nothing is drawn in this subpass: at its end the hardware resolves the same samples once more, into the swapchain image
+            cmdRec.nextSubpass(VK_SUBPASS_CONTENTS_INLINE);
+        }
+        else if (bGammaAdjust) {
+            // If doing gamma adjust then handle that now
             cmdRec.nextSubpass(VK_SUBPASS_CONTENTS_INLINE);
             renderGammaAdjustPostProcessingEffect(cmdRec);
         }
@@ -423,8 +475,10 @@ void VRenderPath_Main::endFrame(vgl::Swapchain& swapchain, vgl::CmdBufferRecorde
         // Make a note of what Vulkan image layout we expect the draw color attachment and MSAA resolve attachment to have
         // following the end of the render pass. This will vary depending on whether the last user was blit or a shader:
         vgl::RenderTexture& drawColorAttachment = mDrawColorAttachments[ringbufferIdx];
-        
-        if (bUsingMsaa || VRenderer::gbUsingGammaAdjustThisFrame) {
+
+        if (bUsingMsaa && mbHardwareMsaaResolve) {
+            drawColorAttachment.setVkImageLayoutHint(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);     // Only ever a color attachment
+        } else if (bUsingMsaa || bGammaAdjust) {
             drawColorAttachment.setVkImageLayoutHint(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         } else {
             drawColorAttachment.setVkImageLayoutHint(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
@@ -433,15 +487,15 @@ void VRenderPath_Main::endFrame(vgl::Swapchain& swapchain, vgl::CmdBufferRecorde
         if (bUsingMsaa) {
             vgl::RenderTexture& msaaResolveAttachment = mMsaaResolver.getResolveAttachment(ringbufferIdx);
 
-            if (VRenderer::gbUsingGammaAdjustThisFrame) {
+            if (bGammaAdjust || bResolveToSwapchain) {
                 msaaResolveAttachment.setVkImageLayoutHint(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             } else {
                 msaaResolveAttachment.setVkImageLayoutHint(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
             }
         }
 
-        // Non gamma-adjust case: blit the drawing color attachment (or MSAA resolve target, if MSAA is active) to the swapchain image.
-        if (!VRenderer::gbUsingGammaAdjustThisFrame) {
+        // Neither case writing the swapchain image: blit the drawing color attachment (or MSAA resolve target, if MSAA is active) to it
+        if ((!bGammaAdjust) && (!bResolveToSwapchain)) {
             blitToSwapchainImage(swapchain, cmdRec);
         }
     }
@@ -462,14 +516,23 @@ bool VRenderPath_Main::didRenderToAllDrawColorAttachments() noexcept {
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
-// Creates the Vulkan render passes used by the render path (both gamma adjusted, and non-gamma adjusted)
+// Creates the Vulkan render passes used by the render path (both gamma adjusted, and non-gamma adjusted).
+//
+// With hardware MSAA resolve, 'bResolveToSwapchain' makes the render pass for presenting straight from tile memory: the draw subpass
+// resolves the samples into the frame history (the resolve attachment, kept for crossfades and the loading plaque), then an empty
+// subpass with the same color attachment resolves them once more, into the swapchain image. Both resolves happen as the tiles are
+// written out, so the samples are the only thing in tile memory.
 //------------------------------------------------------------------------------------------------------------------------------------------
-bool VRenderPath_Main::initRenderPass(vgl::RenderPass& renderPass, const bool bGammaAdjusted) noexcept {
+bool VRenderPath_Main::initRenderPass(vgl::RenderPass& renderPass, const bool bGammaAdjusted, const bool bResolveToSwapchain) noexcept {
     // Sanity checks and some prerequisites
     ASSERT(mpDevice);
+    ASSERT((!bResolveToSwapchain) || (mbHardwareMsaaResolve && (!bGammaAdjusted) && (mColorFormat == mPresentFormat)));
     vgl::LogicalDevice& device = *mpDevice;
     const bool bUsingMsaa = (mNumDrawSamples > 1);
-    
+    const bool bHardwareMsaaResolve = (bUsingMsaa && mbHardwareMsaaResolve);
+    const bool bShaderMsaaResolve = (bUsingMsaa && (!mbHardwareMsaaResolve));
+    const bool bWritesSwapchain = (bGammaAdjusted || bResolveToSwapchain);
+
     // Attachment indexes
     uint32_t mainAttachmentIdx = {};        // Main drawing attachment
     uint32_t resolveAttachmentIdx = {};     // Attachment to resolve MSAA to
@@ -494,7 +557,9 @@ bool VRenderPath_Main::initRenderPass(vgl::RenderPass& renderPass, const bool bG
         // If NOT using MSAA or gamma adjustment then we blit this attachment to the swapchain image (outside of the render pass), in which case we must store it to VRAM first.
         if (bUsingMsaa) {
             attach.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;              // Don't need to write to VRAM at the end of the renderpass (image unused outside of the renderpass).
-            attach.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;  // Don't care: would say undefined but that is not allowed.
+
+            // Don't care: would say undefined but that is not allowed. A hardware resolved attachment is only ever a color attachment.
+            attach.finalLayout = (bHardwareMsaaResolve) ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         }
         else if (bGammaAdjusted) {
             // Stored: crossfades and the loading plaque sample the previous frames from this attachment (no MSAA). With
@@ -520,7 +585,7 @@ bool VRenderPath_Main::initRenderPass(vgl::RenderPass& renderPass, const bool bG
         attach.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
         attach.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         
-        if (bGammaAdjusted) {
+        if (bWritesSwapchain) {
             // Stored: the previous frames for crossfades and the loading plaque (MSAA) are read from this attachment
             attach.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
             attach.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -531,8 +596,8 @@ bool VRenderPath_Main::initRenderPass(vgl::RenderPass& renderPass, const bool bG
         }
     }
     
-    // If doing gamma adjustment then define the gamma adjustment attachment (the swapchain image)
-    if (bGammaAdjusted) {
+    // If doing gamma adjustment (or resolving MSAA into it) then define the gamma adjustment attachment (the swapchain image)
+    if (bWritesSwapchain) {
         swapchainAttachmentIdx = (uint32_t) renderPassDef.attachments.size();
         
         VkAttachmentDescription& attach = renderPassDef.attachments.emplace_back();
@@ -553,10 +618,17 @@ bool VRenderPath_Main::initRenderPass(vgl::RenderPass& renderPass, const bool bG
         VkAttachmentReference& dstAttach = subpassDef.colorAttachments.emplace_back();
         dstAttach.attachment = mainAttachmentIdx;
         dstAttach.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+        // Hardware MSAA resolve: into the frame history, at the end of this subpass (as the tiles are written out)
+        if (bHardwareMsaaResolve) {
+            VkAttachmentReference& resolveAttach = subpassDef.colorResolveAttachments.emplace_back();
+            resolveAttach.attachment = resolveAttachmentIdx;
+            resolveAttach.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        }
     }
 
-    // If doing MSAA, define the MSAA resolve subpass and it's attachments
-    if (bUsingMsaa) {
+    // If doing MSAA resolved by a shader, define the MSAA resolve subpass and it's attachments
+    if (bShaderMsaaResolve) {
         vgl::SubpassDef& subpassDef = renderPassDef.subpasses.emplace_back();
 
         VkAttachmentReference& srcAttach = subpassDef.inputAttachments.emplace_back();
@@ -568,6 +640,21 @@ bool VRenderPath_Main::initRenderPass(vgl::RenderPass& renderPass, const bool bG
         dstAttach.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     }
     
+    // If resolving MSAA into the swapchain image: a subpass without drawing whose color attachment is the same multisampled one, so
+    // the hardware resolves the samples again at its end, into the swapchain image. The subpass dependency on the draw subpass is a
+    // 'by region' one: a tile based GPU merges the two subpasses and does both resolves when the tiles are written out.
+    if (bResolveToSwapchain) {
+        vgl::SubpassDef& subpassDef = renderPassDef.subpasses.emplace_back();
+
+        VkAttachmentReference& colorAttach = subpassDef.colorAttachments.emplace_back();
+        colorAttach.attachment = mainAttachmentIdx;
+        colorAttach.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+        VkAttachmentReference& resolveAttach = subpassDef.colorResolveAttachments.emplace_back();
+        resolveAttach.attachment = swapchainAttachmentIdx;
+        resolveAttach.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    }
+
     // If doing gamma adjustment define the gamma adjust subpass and it's attachments
     if (bGammaAdjusted) {
         vgl::SubpassDef& subpassDef = renderPassDef.subpasses.emplace_back();
@@ -599,12 +686,12 @@ bool VRenderPath_Main::initRenderPass(vgl::RenderPass& renderPass, const bool bG
         dep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     }
 
-    // When we are not doing gamma adjustment then a blit will be used for final output.
+    // When the render pass doesn't write the swapchain image then a blit will be used for final output.
     // Since this happens outside of the render pass, we must add extra synchronization here.
-    if (!bGammaAdjusted) {
-        // Blit must wait on drawing or msaa resolve to finish (depending on whether msaa is enabled)
+    if (!bWritesSwapchain) {
+        // Blit must wait on drawing or msaa resolve to finish (depending on whether msaa is enabled and how it is resolved)
         VkSubpassDependency& dep = renderPassDef.extraSubpassDeps.emplace_back();
-        dep.srcSubpass = (bUsingMsaa) ? 1 : 0;
+        dep.srcSubpass = (bShaderMsaaResolve) ? 1 : 0;
         dep.dstSubpass = VK_SUBPASS_EXTERNAL;
         dep.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
         dep.dstStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;

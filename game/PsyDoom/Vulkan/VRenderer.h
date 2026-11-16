@@ -53,6 +53,7 @@ extern vgl::LogicalDevice           gDevice;
 extern vgl::Swapchain               gSwapchain;
 extern vgl::CmdBufferRecorder       gCmdBufferRec;
 extern bool                         gbUsingGammaAdjustThisFrame;
+extern bool                         gbResolveToSwapchainThisFrame;
 extern vgl::Texture                 gGammaAdjustTex;
 extern bool                         gbSkipNextFramePresent;
 extern bool                         gbSkipNextFrame;
