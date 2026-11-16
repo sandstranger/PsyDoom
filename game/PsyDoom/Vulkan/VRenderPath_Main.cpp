@@ -76,7 +76,7 @@ void VRenderPath_Main::init(
     // are the only thing in tile memory: 4x MSAA of 32-bit color is 128 bits per pixel, which Mali (Bifrost, Valhall up to G57/G7x)
     // holds at full tile size. A resolve subpass with a shader kept the samples, the resolve attachment and the swapchain image in
     // the tile at once (192 bits at 4x: smaller tiles). A hardware resolve needs the format of the samples for the resolve target;
-    // the other builds may draw in 16-bit color and resolve to 32-bit, which only the shader can do, so they keep it.
+    // 16-bit color drawn and resolved to 32-bit is something only the shader can do, so that keeps it too.
     // Only where the renderer allows it (Mali, currently off: see 'VRenderer::init'): otherwise the resolve subpass with a shader.
 #if ANDROID
     mbHardwareMsaaResolve = (bAllowHardwareMsaaResolve && (numDrawSamples > 1) && (colorFormat == resolveFormat));

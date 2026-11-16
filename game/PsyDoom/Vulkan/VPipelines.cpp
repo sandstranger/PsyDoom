@@ -480,17 +480,14 @@ static void initPipelineMultisampleStates(vgl::LogicalDevice& device, const uint
     gMultisampleState_perSettings = vgl::PipelineMultisampleState().setToDefault();
     gMultisampleState_perSettings.rasterizationSamples = (VkSampleCountFlagBits) numSamples;
 
-    // Android: no sample rate shading. It runs the fragment shader once per sample instead of once per pixel, so 4x MSAA made
-    // every wall, floor and sprite fragment (two dependent VRAM/CLUT fetches each) cost four times as much, on the fill rate
-    // bound mobile GPUs where MSAA is otherwise nearly free (the samples are resolved in tile memory). Edges stay antialiased.
-#if !ANDROID
+    // Android too, the same image as the other builds: the fragment shader runs once per sample (with 4x MSAA four times the
+    // fragment work of edge only MSAA), the price of the textures being antialiased as well and not only the edges.
     if (device.getPhysicalDevice()->getFeatures().sampleRateShading) {
         // Enable sample rate shading if we can get it for nicer MSAA.
         // Force it to do MSAA for every single fragment to help eliminate texture shimmer and shader aliasing.
         gMultisampleState_perSettings.sampleShadingEnable = true;
         gMultisampleState_perSettings.minSampleShading = 1.0f;
     }
-#endif
 
     // This is a variant of the 'per settings' state but without sample rate shading (edge only MSAA).
     // This mode is more appropriate for UI elements since MSAA can blur them slightly.

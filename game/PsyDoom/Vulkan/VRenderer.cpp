@@ -171,6 +171,12 @@ static bool gbDidAcquireSwapImageThisFrame;
 // Whether the main render path may have MSAA resolved by the hardware (Android, Mali only, currently off: see 'init')
 static bool gbUseHardwareMsaaResolve = false;
 
+#ifdef ANDROID
+// 16-bit color (A1R5G5B5) for the draw color attachment and the PSX framebuffer wherever the driver supports it, as on the other builds.
+// It was turned off on Android once for MTK (commit 00421ec2, what broke is not recorded): false brings back 32-bit color everywhere.
+static constexpr bool ANDROID_ALLOW_16BIT_COLOR = true;
+#endif
+
 //------------------------------------------------------------------------------------------------------------------------------------------
 // Decides the multisample anti-aliasing sample count based on user preferences and hardware capabilities
 //------------------------------------------------------------------------------------------------------------------------------------------
@@ -185,15 +191,27 @@ static void decideDrawSampleCount() noexcept {
 #ifdef ANDROID
     // The real limit of the attachment that is multisampled: 'framebufferColorSampleCounts' is only the generic one for color attachments,
     // the counts for a given format and usage can be lower. That attachment is the draw color attachment (see 'init'), a transient color
-    // attachment: in the swapchain's format when the hardware resolves it, otherwise 'COLOR_32_FORMAT' and also an input attachment of
-    // the resolve subpass (see 'VRenderPath_Main::init').
+    // attachment: in the swapchain's format when the hardware resolves it, otherwise 'COLOR_16_FORMAT' or 'COLOR_32_FORMAT' and also an
+    // input attachment of the resolve subpass (see 'VRenderPath_Main::init'). With MSAA, 16-bit color only needs the format to be a color
+    // attachment (see 'determine16BitColorSupport').
     {
         const vgl::VkFuncs& vkFuncs = gpPhysicalDevice->getVkFuncs();
         VkImageFormatProperties drawFormatProps = {};
 
+        const bool bDraw16BitColor = (
+            ANDROID_ALLOW_16BIT_COLOR &&
+            (!gbUseHardwareMsaaResolve) &&
+            (!Config::gbUseVulkan32BitShading) &&
+            (gpPhysicalDevice->findFirstSupportedRenderTextureFormat(
+                &COLOR_16_FORMAT, 1, VK_IMAGE_TILING_OPTIMAL, VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT
+            ) != VK_FORMAT_UNDEFINED)
+        );
+
+        const VkFormat drawFormat = (gbUseHardwareMsaaResolve) ? gPresentSurfaceFormat : (bDraw16BitColor) ? COLOR_16_FORMAT : COLOR_32_FORMAT;
+
         const VkResult formatQueryResult = vkFuncs.vkGetPhysicalDeviceImageFormatProperties(
             gpPhysicalDevice->getVkPhysicalDevice(),
-            (gbUseHardwareMsaaResolve) ? gPresentSurfaceFormat : COLOR_32_FORMAT,
+            drawFormat,
             VK_IMAGE_TYPE_2D,
             VK_IMAGE_TILING_OPTIMAL,
             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT |
@@ -249,7 +267,14 @@ static void decideDrawSampleCount() noexcept {
 // Determines if 16-bit color framebuffers and textures are possible for the specified device
 //------------------------------------------------------------------------------------------------------------------------------------------
 static void determine16BitColorSupport(const vgl::PhysicalDevice& device) noexcept {
-#ifndef ANDROID
+#ifdef ANDROID
+    if (!ANDROID_ALLOW_16BIT_COLOR) {
+        gbCanVulkanFbUse16BitColor = false;
+        gbCanPsxFbUse16BitColor = false;
+        return;
+    }
+#endif
+
     // Can the PSX framebuffer texture use a 16-bit format?
     // This is not used for any rendering, just for copying to and blitting from...
     gbCanPsxFbUse16BitColor = device.findFirstSupportedOptimalTilingFormat(
@@ -269,11 +294,7 @@ static void determine16BitColorSupport(const vgl::PhysicalDevice& device) noexce
         // Color attachment can either be used as a transfer & sampling source (for blits and crossfades, with no MSAA) or an input attachment for MSAA resolve
         VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | ((gDrawSampleCount > 1) ? 0 : VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_BLIT_SRC_BIT)
     );
-#else
-        gbCanVulkanFbUse16BitColor = false;
-        gbCanPsxFbUse16BitColor = false;
-#endif
-    }
+}
 
 //------------------------------------------------------------------------------------------------------------------------------------------
 // Decides on the color format used for the window/presentation surface as well as the colorspace
@@ -699,10 +720,11 @@ void init() noexcept {
     // Initialize all render paths.
     // Android with a hardware MSAA resolve: the draw color attachment and the MSAA resolve attachment (the frame history) have the
     // swapchain's format, which is a 32-bit one too (see 'ALLOWED_COLOR_SURFACE_FORMATS'): the hardware resolves the samples into both
-    // of them and the swapchain image as the tiles are written out, and a resolve keeps the format.
+    // of them and the swapchain image as the tiles are written out, and a resolve keeps the format. Otherwise the same as the other builds.
 #ifdef ANDROID
-    const VkFormat drawColorFormat = (gbUseHardwareMsaaResolve) ? gPresentSurfaceFormat : COLOR_32_FORMAT;
-    const VkFormat resolveFormat = drawColorFormat;
+    const VkFormat drawColorFormat = (gbUseHardwareMsaaResolve) ? gPresentSurfaceFormat :
+        (Config::gbUseVulkan32BitShading || (!gbCanVulkanFbUse16BitColor)) ? COLOR_32_FORMAT : COLOR_16_FORMAT;
+    const VkFormat resolveFormat = (gbUseHardwareMsaaResolve) ? drawColorFormat : COLOR_32_FORMAT;
 #else
     const VkFormat drawColorFormat = (Config::gbUseVulkan32BitShading || (!gbCanVulkanFbUse16BitColor)) ? COLOR_32_FORMAT : COLOR_16_FORMAT;
     const VkFormat resolveFormat = COLOR_32_FORMAT;
