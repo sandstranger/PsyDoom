@@ -197,22 +197,16 @@ static void decideDrawSampleCount() noexcept {
     }
 
     // Every Android GPU renders in tiles: the samples of the tile being rendered live in on-chip tile memory, which is what makes MSAA
-    // nearly free there - as long as everything fits. The budget at full tile size is 128 bits of color per pixel on Mali (Bifrost,
-    // Valhall up to G7x/G57/G68/G78); Adreno's bins and PowerVR's tiles shrink likewise as the bytes per pixel grow. The MSAA render pass
-    // keeps more than the samples in the tile: the 1x resolve attachment (stored, it is the frame history for crossfades and the loading
-    // plaque) and the swapchain image written by the last subpass, 32 bits each. So: samples * 32 + 32 + 32 <= 128, i.e 2x at most.
-    // Forced on Android whatever count is configured: above it the tiles get smaller (more tiles, the geometry of each re-read for every
-    // one of them) and the resolve subpass reads more samples per pixel.
+    // cheap there. 8x/16x MSAA is not cheap on any mobile tiler though (much smaller tiles, the resolve subpass reading 8+ samples per
+    // pixel), so whatever the hardware allows is used, up to 4x at most. Note that at 4x the samples (4 * 32 bits) plus the 1x resolve
+    // attachment and the swapchain image exceed the 128 bits per pixel Mali has at full tile size (Bifrost, Valhall up to G57/G7x), so
+    // the tiles get smaller there: it costs some performance, 2x fits in full size tiles.
     {
-        constexpr uint32_t TILE_COLOR_BITS_PER_PIXEL = 128;
-        constexpr uint32_t DRAW_COLOR_BITS_PER_SAMPLE = 32;     // COLOR_32_FORMAT
-        constexpr uint32_t RESOLVE_COLOR_BITS = 32;             // COLOR_32_FORMAT, 1x
-        constexpr uint32_t SWAPCHAIN_COLOR_BITS = 32;           // B8G8R8A8/R8G8B8A8 swapchain image
-        constexpr uint32_t TILE_MAX_SAMPLES = (TILE_COLOR_BITS_PER_PIXEL - RESOLVE_COLOR_BITS - SWAPCHAIN_COLOR_BITS) / DRAW_COLOR_BITS_PER_SAMPLE;
-        static_assert(TILE_MAX_SAMPLES == 2);
+        constexpr uint32_t MAX_SAMPLES = 4;
+        static_assert((MAX_SAMPLES >= 1) && ((MAX_SAMPLES & (MAX_SAMPLES - 1)) == 0));
 
-        // Note: VK_SAMPLE_COUNT_N_BIT == N, so this keeps the bits for 1..TILE_MAX_SAMPLES samples
-        deviceMsaaModes &= (VkSampleCountFlags)((TILE_MAX_SAMPLES << 1) - 1);
+        // Note: VK_SAMPLE_COUNT_N_BIT == N, so this keeps the bits for 1..MAX_SAMPLES samples
+        deviceMsaaModes &= (VkSampleCountFlags)((MAX_SAMPLES << 1) - 1);
     }
 #endif
 
