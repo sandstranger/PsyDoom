@@ -7,8 +7,6 @@
 #include "PlayerPrefs.h"
 #include "Video.h"
 
-#include <cstring>
-
 BEGIN_NAMESPACE(Video)
 
 //------------------------------------------------------------------------------------------------------------------------------------------
@@ -61,9 +59,14 @@ void VideoSurface_Vulkan::setPixels(const uint32_t* const pSrcPixels) noexcept {
     if (!pDstPixels)
         return;
 
+    // Note: the source pixels are XBGR8888 (red in the lowest byte) but the texture is 'VK_FORMAT_B8G8R8A8_UNORM' (blue in the lowest byte),
+    // so red and blue must be swapped during the copy. Without the swap movies and logos are shown with red and blue swapped.
     if (!bDoGammaCorrection) {
-        // Regular (fast) copy path
-        std::memcpy(pDstPixels, pSrcPixels, numPixels * sizeof(uint32_t));
+        // Regular (fast) copy path: just swap red and blue
+        for (uint32_t i = 0; i < numPixels; ++i) {
+            const uint32_t srcPixel = pSrcPixels[i];
+            pDstPixels[i] = (srcPixel & 0xFF00FF00) | ((srcPixel & 0x000000FF) << 16) | ((srcPixel >> 16) & 0x000000FF);
+        }
     }
     else {
         // Gamma corrected copy
@@ -73,7 +76,7 @@ void VideoSurface_Vulkan::setPixels(const uint32_t* const pSrcPixels) noexcept {
             const uint8_t g = pGammaRemapTbl8[(uint8_t)(srcPixel >> 8)];
             const uint8_t b = pGammaRemapTbl8[(uint8_t)(srcPixel >> 16)];
 
-            pDstPixels[i] = (srcPixel & 0xFF000000) | (b << 16) | (g << 8) | r;
+            pDstPixels[i] = (srcPixel & 0xFF000000) | ((uint32_t) r << 16) | ((uint32_t) g << 8) | b;
         }
     }
 
