@@ -18,6 +18,7 @@ struct Config_Graphics {
     ConfigField     outputDisplayIndex;
     ConfigField     exclusiveFullscreenMode;
     ConfigField     antiAliasingMultisamples;
+    ConfigField     antiAliasingEdgesOnly;
     ConfigField     vulkanRenderHeight;
     ConfigField     vulkanPixelStretch;
     ConfigField     vulkanTripleBuffer;

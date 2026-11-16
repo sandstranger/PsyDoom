@@ -81,6 +81,7 @@ bool            gbVulkanTripleBuffer;
 bool            gbVulkanDrawExtendedStatusBar;
 bool            gbVulkanWidescreenEnabled;
 int32_t         gAAMultisamples;
+bool            gbAAEdgesOnly;
 int32_t         gTopOverscanPixels;
 int32_t         gBottomOverscanPixels;
 bool            gbEnhanceWallDrawPrecision;

@@ -102,6 +102,16 @@ void initCfgSerialization_Graphics() noexcept {
         gDefaultAntiAliasingMultisamples
     );
 
+    cfg.antiAliasingEdgesOnly = makeConfigField(
+        "AntiAliasingEdgesOnly",
+        "Vulkan renderer only: if enabled then multisample anti-aliasing smooths only the edges of\n"
+        "geometry. By default (disabled) the shading of every sample is computed separately, which also\n"
+        "smooths texture shimmer but multiplies the shading work by the number of samples: with 4x MSAA\n"
+        "four times as much. Enabling this can greatly improve performance on mobile GPUs.",
+        gbAAEdgesOnly,
+        false
+    );
+
     cfg.vulkanRenderHeight = makeConfigField(
         "VulkanRenderHeight",
         "Vulkan renderer: determines the vertical resolution (in pixels) of the render/draw framebuffer.\n"

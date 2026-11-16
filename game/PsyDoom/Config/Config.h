@@ -68,6 +68,7 @@ extern bool             gbVulkanTripleBuffer;
 extern bool             gbVulkanDrawExtendedStatusBar;
 extern bool             gbVulkanWidescreenEnabled;
 extern int32_t          gAAMultisamples;
+extern bool             gbAAEdgesOnly;
 extern int32_t          gTopOverscanPixels;
 extern int32_t          gBottomOverscanPixels;
 extern bool             gbEnhanceWallDrawPrecision;

@@ -480,9 +480,10 @@ static void initPipelineMultisampleStates(vgl::LogicalDevice& device, const uint
     gMultisampleState_perSettings = vgl::PipelineMultisampleState().setToDefault();
     gMultisampleState_perSettings.rasterizationSamples = (VkSampleCountFlagBits) numSamples;
 
-    // Android too, the same image as the other builds: the fragment shader runs once per sample (with 4x MSAA four times the
-    // fragment work of edge only MSAA), the price of the textures being antialiased as well and not only the edges.
-    if (device.getPhysicalDevice()->getFeatures().sampleRateShading) {
+    // The fragment shader runs once per sample (with 4x MSAA four times the fragment work of edge only MSAA), the price of the
+    // textures being antialiased as well and not only the edges. 'AntiAliasingEdgesOnly' in the config turns it off: much faster
+    // on fill rate bound mobile GPUs (Mali etc.), where MSAA itself is nearly free (the samples are resolved in tile memory).
+    if ((!Config::gbAAEdgesOnly) && device.getPhysicalDevice()->getFeatures().sampleRateShading) {
         // Enable sample rate shading if we can get it for nicer MSAA.
         // Force it to do MSAA for every single fragment to help eliminate texture shimmer and shader aliasing.
         gMultisampleState_perSettings.sampleShadingEnable = true;
