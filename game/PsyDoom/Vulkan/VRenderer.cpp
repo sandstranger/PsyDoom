@@ -205,15 +205,7 @@ static void decideDrawSampleCount() noexcept {
         deviceMsaaModes &= (formatQueryResult == VK_SUCCESS) ? drawFormatProps.sampleCounts : (VkSampleCountFlags) VK_SAMPLE_COUNT_1_BIT;
     }
 
-    // No limit from the driver either: the requested count is used as it is (as a power of two, up to the 64 Vulkan has). The driver's
-    // counts are only logged. A count the driver doesn't list for the draw attachment is invalid Vulkan (VUID-VkImageCreateInfo-samples-
-    // 02258): the attachment or the pipelines may then fail to be created, or the GPU misbehave.
-    const VkSampleCountFlags driverMsaaModes = deviceMsaaModes;
-
-    deviceMsaaModes = (
-        VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_2_BIT | VK_SAMPLE_COUNT_4_BIT | VK_SAMPLE_COUNT_8_BIT |
-        VK_SAMPLE_COUNT_16_BIT | VK_SAMPLE_COUNT_32_BIT | VK_SAMPLE_COUNT_64_BIT
-    );
+    // No cap of our own: the requested count is used up to the most the driver allows for that attachment
 #endif
 
     if ((wantedNumSamples >= 64) && (deviceMsaaModes & VK_SAMPLE_COUNT_64_BIT)) {
@@ -233,13 +225,12 @@ static void decideDrawSampleCount() noexcept {
     }
 
 #ifdef ANDROID
-    if (((int32_t) gDrawSampleCount != wantedNumSamples) || ((driverMsaaModes & gDrawSampleCount) == 0)) {
+    if ((int32_t) gDrawSampleCount != wantedNumSamples) {
         SDL_Log(
-            "PsyDoom Vulkan: MSAA %dx requested, using %ux (sample counts the driver lists for the draw attachment: 0x%x%s)",
+            "PsyDoom Vulkan: MSAA %dx requested, using %ux (sample counts usable for the draw attachment: 0x%x)",
             (int) wantedNumSamples,
             (unsigned) gDrawSampleCount,
-            (unsigned) driverMsaaModes,
-            ((driverMsaaModes & gDrawSampleCount) == 0) ? ", not this one" : ""
+            (unsigned) deviceMsaaModes
         );
     }
 #endif
