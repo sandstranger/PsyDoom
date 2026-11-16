@@ -25,7 +25,8 @@ public:
         const uint32_t numDrawSamples,
         const VkFormat colorFormat,
         const VkFormat resolveFormat,
-        const VkFormat presentFormat
+        const VkFormat presentFormat,
+        const bool bAllowHardwareMsaaResolve
     ) noexcept;
 
     void destroy() noexcept;

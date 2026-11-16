@@ -57,7 +57,8 @@ void VRenderPath_Main::init(
     const uint32_t numDrawSamples,
     const VkFormat colorFormat,
     const VkFormat resolveFormat,
-    const VkFormat presentFormat
+    const VkFormat presentFormat,
+    const bool bAllowHardwareMsaaResolve
 ) noexcept {
     // Sanity checks
     ASSERT_LOG(!mbIsValid, "Can't initialize twice!");
@@ -76,10 +77,12 @@ void VRenderPath_Main::init(
     // holds at full tile size. A resolve subpass with a shader kept the samples, the resolve attachment and the swapchain image in
     // the tile at once (192 bits at 4x: smaller tiles). A hardware resolve needs the format of the samples for the resolve target;
     // the other builds may draw in 16-bit color and resolve to 32-bit, which only the shader can do, so they keep it.
+    // Only where the renderer allows it (Mali, see 'VRenderer::init'): the other GPUs keep the resolve subpass with a shader.
 #if ANDROID
-    mbHardwareMsaaResolve = ((numDrawSamples > 1) && (colorFormat == resolveFormat));
+    mbHardwareMsaaResolve = (bAllowHardwareMsaaResolve && (numDrawSamples > 1) && (colorFormat == resolveFormat));
 #else
     mbHardwareMsaaResolve = false;
+    (void) bAllowHardwareMsaaResolve;
 #endif
 
     // Create the render passes and the MSAA resolver if we are doing multi-sampling

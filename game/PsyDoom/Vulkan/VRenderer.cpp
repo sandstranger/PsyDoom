@@ -168,6 +168,9 @@ static IVRendererPath* gpNextRenderPath;
 // If true then we must wait on the swapchain image semaphore this frame (we had to acquire it)
 static bool gbDidAcquireSwapImageThisFrame;
 
+// Whether the main render path may have MSAA resolved by the hardware (Android, Mali only: see 'init')
+static bool gbUseHardwareMsaaResolve = false;
+
 //------------------------------------------------------------------------------------------------------------------------------------------
 // Decides the multisample anti-aliasing sample count based on user preferences and hardware capabilities
 //------------------------------------------------------------------------------------------------------------------------------------------
@@ -181,18 +184,20 @@ static void decideDrawSampleCount() noexcept {
 
 #ifdef ANDROID
     // The real limit of the attachment that is multisampled: 'framebufferColorSampleCounts' is only the generic one for color attachments,
-    // the counts for a given format and usage can be lower. That attachment is the draw color attachment, in the swapchain's format on
-    // Android (see 'init'), used as a transient color attachment only: the hardware resolves it (see 'VRenderPath_Main::init').
+    // the counts for a given format and usage can be lower. That attachment is the draw color attachment (see 'init'), a transient color
+    // attachment: in the swapchain's format when the hardware resolves it, otherwise 'COLOR_32_FORMAT' and also an input attachment of
+    // the resolve subpass (see 'VRenderPath_Main::init').
     {
         const vgl::VkFuncs& vkFuncs = gpPhysicalDevice->getVkFuncs();
         VkImageFormatProperties drawFormatProps = {};
 
         const VkResult formatQueryResult = vkFuncs.vkGetPhysicalDeviceImageFormatProperties(
             gpPhysicalDevice->getVkPhysicalDevice(),
-            gPresentSurfaceFormat,
+            (gbUseHardwareMsaaResolve) ? gPresentSurfaceFormat : COLOR_32_FORMAT,
             VK_IMAGE_TYPE_2D,
             VK_IMAGE_TILING_OPTIMAL,
-            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT,
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT |
+                ((gbUseHardwareMsaaResolve) ? 0u : (VkImageUsageFlags) VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT),
             0,
             &drawFormatProps
         );
@@ -659,8 +664,17 @@ void init() noexcept {
         );
     }
 
+#ifdef ANDROID
+    // MSAA resolved by the hardware (pResolveAttachments, see 'VRenderPath_Main::init'): on Mali only, which it was made for. With 4x
+    // MSAA on an Adreno 830 the game froze on the first frames of the main render path (the render pass resolving the samples into the
+    // frame history and, in an empty second subpass, once more into the swapchain image). The other GPUs keep the resolve subpass with
+    // a shader, as before.
+    constexpr uint32_t VENDOR_ID_ARM = 0x13B5;
+    gbUseHardwareMsaaResolve = (gpPhysicalDevice->getProps().vendorID == VENDOR_ID_ARM);
+#endif
+
     // Decide the window/present surface format, draw sample count and whether 16-bit color is possible.
-    // Note: the present format comes first, the draw color attachment has that format on Android.
+    // Note: the present format comes first, the draw color attachment has that format with a hardware MSAA resolve.
     decidePresentSurfaceFormat();
     decideDrawSampleCount();
     determine16BitColorSupport(*gpPhysicalDevice);
@@ -673,12 +687,12 @@ void init() noexcept {
     VPipelines::initPipelineComponents(gDevice, gDrawSampleCount);
 
     // Initialize all render paths.
-    // Android: the draw color attachment and the MSAA resolve attachment (the frame history) have the swapchain's format, which is a
-    // 32-bit one too (see 'ALLOWED_COLOR_SURFACE_FORMATS'): the hardware resolves the samples into both of them and the swapchain image
-    // as the tiles are written out, and a resolve keeps the format.
+    // Android with a hardware MSAA resolve: the draw color attachment and the MSAA resolve attachment (the frame history) have the
+    // swapchain's format, which is a 32-bit one too (see 'ALLOWED_COLOR_SURFACE_FORMATS'): the hardware resolves the samples into both
+    // of them and the swapchain image as the tiles are written out, and a resolve keeps the format.
 #ifdef ANDROID
-    const VkFormat drawColorFormat = gPresentSurfaceFormat;
-    const VkFormat resolveFormat = gPresentSurfaceFormat;
+    const VkFormat drawColorFormat = (gbUseHardwareMsaaResolve) ? gPresentSurfaceFormat : COLOR_32_FORMAT;
+    const VkFormat resolveFormat = drawColorFormat;
 #else
     const VkFormat drawColorFormat = (Config::gbUseVulkan32BitShading || (!gbCanVulkanFbUse16BitColor)) ? COLOR_32_FORMAT : COLOR_16_FORMAT;
     const VkFormat resolveFormat = COLOR_32_FORMAT;
@@ -686,7 +700,7 @@ void init() noexcept {
     const VkFormat psxFramebufferFormat = (gbCanPsxFbUse16BitColor) ? COLOR_16_FORMAT : COLOR_32_FORMAT;
 
     gRenderPath_Psx.init(gDevice, gSwapchain, psxFramebufferFormat, gPresentSurfaceFormat);
-    gRenderPath_Main.init(gDevice, gSwapchain, gDrawSampleCount, drawColorFormat, resolveFormat, gPresentSurfaceFormat);
+    gRenderPath_Main.init(gDevice, gSwapchain, gDrawSampleCount, drawColorFormat, resolveFormat, gPresentSurfaceFormat, gbUseHardwareMsaaResolve);
     gRenderPath_Crossfade.init(gDevice, gSwapchain, gPresentSurfaceFormat, gRenderPath_Main);
     gRenderPath_LoadingPlaque.init(gDevice, gSwapchain, gPresentSurfaceFormat);
     gRenderPath_Blit.init(gDevice);
