@@ -77,7 +77,7 @@ void VRenderPath_Main::init(
     // holds at full tile size. A resolve subpass with a shader kept the samples, the resolve attachment and the swapchain image in
     // the tile at once (192 bits at 4x: smaller tiles). A hardware resolve needs the format of the samples for the resolve target;
     // the other builds may draw in 16-bit color and resolve to 32-bit, which only the shader can do, so they keep it.
-    // Only where the renderer allows it (Mali, see 'VRenderer::init'): the other GPUs keep the resolve subpass with a shader.
+    // Only where the renderer allows it (Mali, currently off: see 'VRenderer::init'): otherwise the resolve subpass with a shader.
 #if ANDROID
     mbHardwareMsaaResolve = (bAllowHardwareMsaaResolve && (numDrawSamples > 1) && (colorFormat == resolveFormat));
 #else

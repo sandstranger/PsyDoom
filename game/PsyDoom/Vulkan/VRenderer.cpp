@@ -168,7 +168,7 @@ static IVRendererPath* gpNextRenderPath;
 // If true then we must wait on the swapchain image semaphore this frame (we had to acquire it)
 static bool gbDidAcquireSwapImageThisFrame;
 
-// Whether the main render path may have MSAA resolved by the hardware (Android, Mali only: see 'init')
+// Whether the main render path may have MSAA resolved by the hardware (Android, Mali only, currently off: see 'init')
 static bool gbUseHardwareMsaaResolve = false;
 
 //------------------------------------------------------------------------------------------------------------------------------------------
@@ -665,12 +665,13 @@ void init() noexcept {
     }
 
 #ifdef ANDROID
-    // MSAA resolved by the hardware (pResolveAttachments, see 'VRenderPath_Main::init'): on Mali only, which it was made for. With 4x
-    // MSAA on an Adreno 830 the game froze on the first frames of the main render path (the render pass resolving the samples into the
-    // frame history and, in an empty second subpass, once more into the swapchain image). The other GPUs keep the resolve subpass with
-    // a shader, as before.
+    // MSAA resolved by the hardware (pResolveAttachments, see 'VRenderPath_Main::init'), made for Mali. With 4x MSAA on an Adreno 830
+    // the game froze on the first frames of the main render path (the render pass resolving the samples into the frame history and, in
+    // an empty second subpass, once more into the swapchain image), and it was never seen working on a Mali either: off everywhere for
+    // now, every GPU resolves in a subpass with a shader. Set 'HARDWARE_MSAA_RESOLVE_ON_MALI' to turn it back on for Mali.
+    constexpr bool HARDWARE_MSAA_RESOLVE_ON_MALI = false;
     constexpr uint32_t VENDOR_ID_ARM = 0x13B5;
-    gbUseHardwareMsaaResolve = (gpPhysicalDevice->getProps().vendorID == VENDOR_ID_ARM);
+    gbUseHardwareMsaaResolve = (HARDWARE_MSAA_RESOLVE_ON_MALI && (gpPhysicalDevice->getProps().vendorID == VENDOR_ID_ARM));
 #endif
 
     // Decide the window/present surface format, draw sample count and whether 16-bit color is possible.
