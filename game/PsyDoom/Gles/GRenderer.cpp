@@ -1,6 +1,6 @@
 //------------------------------------------------------------------------------------------------------------------------------------------
-// The OpenGL ES 3.0 renderer, core module: frame lifecycle, render paths, framebuffers, PSX VRAM and the replay of what 'VDrawing'
-// recorded for the frame. Written for tile based GPUs, see the header for the details.
+// The OpenGL ES renderer, core module: frame lifecycle, render paths, framebuffers, PSX VRAM and the replay of what 'VDrawing'
+// recorded for the frame, for both the OpenGL ES 3.0 and 2.0 paths. Written for tile based GPUs, see the header for the details.
 //------------------------------------------------------------------------------------------------------------------------------------------
 #include "GRenderer.h"
 
@@ -47,12 +47,30 @@ static constexpr GLuint64   FENCE_WAIT_TIMEOUT  = 100'000'000;  // 100 ms per wa
 // Types
 //------------------------------------------------------------------------------------------------------------------------------------------
 
-// How MSAA is done for the main render path
+// How MSAA is done for the main render path. The candidates are checked in this order (see 'getMsaaModeCandidates'): the tile based
+// ones first, then the multisampled renderbuffer ones, of which only one is available on a given driver in practice.
 enum class MsaaMode : uint8_t {
     None,
-    RenderToTextureExt,     // EXT_multisampled_render_to_texture: samples only in tile memory, resolved as tiles are written out
+    RenderToTextureExt,     // EXT_multisampled_render_to_texture (OpenGL ES 2.0 and 3.0): samples only in tile memory, resolved as the tiles
+                            // are written out. ANGLE (Vulkan) has it too: a transient multisampled image resolved by the render pass itself.
     RenderToTextureImg,     // IMG_multisampled_render_to_texture: the same (PowerVR)
-    Renderbuffer            // Multisampled renderbuffer resolved by a blit, then invalidated (GPUs without the above)
+    Renderbuffer,           // OpenGL ES 3.0: multisampled renderbuffer resolved by glBlitFramebuffer, then invalidated
+    RenderbufferAngle,      // ANGLE_framebuffer_multisample + ANGLE_framebuffer_blit: the same with ANGLE's extensions (OpenGL ES 2.0)
+    RenderbufferNv,         // NV_framebuffer_multisample + NV_framebuffer_blit: the same with NVIDIA's extensions (Tegra, OpenGL ES 2.0)
+    RenderbufferApple       // APPLE_framebuffer_multisample: the same, resolved with glResolveMultisampleFramebufferAPPLE
+};
+
+static constexpr bool isRenderbufferMsaa(const MsaaMode msaaMode) noexcept {
+    return (msaaMode >= MsaaMode::Renderbuffer);
+}
+
+// A texture format. OpenGL ES 3.0 makes textures with 'glTexStorage2D' (sized internal format), OpenGL ES 2.0 with 'glTexImage2D',
+// where the internal format is unsized (the same as 'format') and the format and type decide the storage.
+struct TexFormat {
+    GLenum  internalFormat;
+    GLenum  format;             // Format and type of the pixels uploaded
+    GLenum  type;
+    GLenum  renderbufferFormat; // The matching sized format for a multisampled renderbuffer resolved into the texture, '0' if none
 };
 
 enum class BlendMode : uint8_t {
@@ -72,7 +90,7 @@ struct PipelineState {
     bool        bPerSampleShading;      // Sample rate shading when MSAA is on (as with Vulkan: the 3D world, but not the UI or sky)
 };
 
-// Uniform block of the draw programs, std140 layout ('VShaderUniforms_Draw' + padding to the block size)
+// Uniform block of the draw programs, std140 layout ('VShaderUniforms_Draw' + padding to the block size). OpenGL ES 3.0 only.
 struct DrawUniformBlock {
     float   mvpMatrix[16];
     float   ndcToPsxScale[2];
@@ -87,11 +105,11 @@ static_assert(sizeof(Matrix4f) == sizeof(float) * 16);
 // One slot of the ring of per frame streaming buffers
 struct StreamSlot {
     GLuint      vbo;
-    GLuint      ubo;
-    GLuint      vao;
+    GLuint      ubo;        // OpenGL ES 3.0 only
+    GLuint      vao;        // OpenGL ES 3.0 only
     GLsizeiptr  vboSize;
     GLsizeiptr  uboSize;
-    GLsync      fence;      // Signalled once the GPU is done with the frame that used the slot
+    GLsync      fence;      // OpenGL ES 3.0 only: signalled once the GPU is done with the frame that used the slot
 };
 
 // A pending update to an area of PSX VRAM
@@ -113,6 +131,14 @@ struct StateCache {
     int8_t      bScissorTest;
 };
 
+// What the device and the API path can do
+struct Caps {
+    bool    bAngle;                 // The driver is ANGLE (OpenGL ES on top of Vulkan, Direct3D etc.)
+    bool    bUnpackSubimage;        // GL_UNPACK_ROW_LENGTH and the skips: OpenGL ES 3.0 or EXT_unpack_subimage
+    bool    bDiscardFramebuffer;    // OpenGL ES 2.0: EXT_discard_framebuffer (OpenGL ES 3.0 has glInvalidateFramebuffer)
+    bool    bHighpFragment;         // 'highp' floats in fragment shaders (always with OpenGL ES 3.0)
+};
+
 //------------------------------------------------------------------------------------------------------------------------------------------
 // State
 //------------------------------------------------------------------------------------------------------------------------------------------
@@ -128,20 +154,25 @@ static RenderPath   gCurRenderPath = RenderPath::Main;
 static RenderPath   gNextRenderPath = RenderPath::Main;
 
 // What the device can do and what was chosen
+static GApi         gApi = GApi::Gles3;
+static Caps         gCaps;
 static GLint        gMaxTextureSize;
 static GLint        gUboOffsetAlignment;
 static MsaaMode     gMsaaMode;
 static GLsizei      gNumSamples;            // Samples of the main render path, '1' without MSAA
-static bool         gbPerSampleShading;     // Sample rate shading for the 3D world when MSAA is on (OES_sample_shading)
-static GLenum       gDrawColorFormat;       // Color format of the frames drawn: 16-bit like the PSX, or 32-bit
-static bool         gbStagedVramUpdates;    // Whether PSX VRAM updates are copied in by the GPU (it can be a color attachment)
+static bool         gbPerSampleShading;     // Sample rate shading for the 3D world when MSAA is on (OpenGL ES 3.0: OES_sample_shading)
+static TexFormat    gDrawColorFormat;       // Color format of the frames drawn: 16-bit like the PSX, or 32-bit
+static TexFormat    gVramFormat;            // Format of PSX VRAM, the staging textures and the PSX framebuffer: 16 bits per texel
+static TexFormat    gGammaLutFormat;        // Format of the gamma remap table: 8 bits per texel
+static TexFormat    gRgba8Format;           // RGBA8 textures (loading plaques, movies and logos)
+static bool         gbStagedVramUpdates;    // Whether PSX VRAM updates are copied in by the GPU
 
 // Size of the screen (window surface) in pixels
 static uint32_t     gScreenW;
 static uint32_t     gScreenH;
 
 // Main render path: the frames drawn (the latest ones are kept for crossfades and loading plaques).
-// With EXT_multisampled_render_to_texture the framebuffers render multisampled to the single sample textures directly.
+// With multisampled render to texture the framebuffers render multisampled to the single sample textures directly.
 static GLuint       gHistoryTex[NUM_FRAME_HISTORY];
 static GLuint       gHistoryFbo[NUM_FRAME_HISTORY];
 static bool         gbRenderedHistory[NUM_FRAME_HISTORY];
@@ -151,36 +182,56 @@ static uint32_t     gHistoryH;
 static GLuint       gMsaaRenderbuffer;                      // MSAA with a renderbuffer only
 static GLuint       gMsaaFbo;
 
-// PSX render path: the PSX framebuffer, as is (R16UI)
+// PSX render path: the PSX framebuffer, as is
 static GLuint       gPsxFbTex[NUM_PSX_FB_TEXTURES];
 static uint32_t     gPsxFbTexIdx;
 
 // PSX VRAM, its pending updates and the staging textures used to copy them in
 static GLuint                   gVramTex;
-static GLuint                   gVramFbo;
+static GLuint                   gVramFbo;                   // OpenGL ES 3.0 only
 static GLuint                   gStagingTex[NUM_STAGING_TEX];
 static GLuint                   gStagingFbo[NUM_STAGING_TEX];
 static uint32_t                 gStagingIdx;
 static std::vector<VramRect>    gPendingVramRects;
 static bool                     gbVramFullUploadPending;
 static std::vector<VramBlit>    gVramBlits;
+static std::vector<uint16_t>    gVramUploadRows;            // Without GL_UNPACK_ROW_LENGTH: the rows of an area uploaded, gathered
 
-// Gamma adjustment remap table (256x1, R8)
+// Gamma adjustment remap table (256x1)
 static GLuint gGammaLutTex;
 
-// Samplers for the post programs (textures sampled with normalized coordinates)
+// Samplers for the post programs (textures sampled with normalized coordinates). OpenGL ES 3.0 only: the filter is set on the
+// texture itself with OpenGL ES 2.0.
 static GLuint gSamplerNearest;
 static GLuint gSamplerLinear;
 
-// Streaming buffers for the frames of the main render path, and an empty VAO for draws with no vertex attributes
+// Streaming buffers for the frames of the main render path, and the corners of the quads drawn by the post programs
 static StreamSlot   gStreamSlots[NUM_STREAM_SLOTS];
 static uint32_t     gStreamSlotIdx;
-static GLuint       gEmptyVao;
+static GLuint       gQuadVbo;
+static GLuint       gQuadVao;               // OpenGL ES 3.0 only
+static GLuint       gNumEnabledAttribs;     // OpenGL ES 2.0 only (no VAOs): how many vertex attributes are enabled (from 0)
 
-// Uniform data for the current frame, as uploaded
+// Uniform data for the current frame, as uploaded (OpenGL ES 3.0)
 static std::vector<std::byte> gUniformUploadBuffer;
 
+// OpenGL ES 2.0 (no uniform blocks): the draw uniforms in effect and which of them each draw program has.
+// The serial number changes whenever the uniforms do: a program gets them before its next draw if its number is not the same.
+static const VShaderUniforms_Draw   gZeroDrawUniforms = {};
+static const VShaderUniforms_Draw*  gpDrawUniforms = &gZeroDrawUniforms;
+static uint32_t                     gDrawUniformsSerial;
+static uint32_t                     gProgramUniformsSerial[NUM_DRAW_PROGRAMS];
+
 static StateCache gStateCache;
+
+static bool isGles3() noexcept {
+    return (gApi == GApi::Gles3);
+}
+
+// Clears the GL error flags (bounded: a lost context can keep reporting errors)
+static void clearGlErrors() noexcept {
+    for (uint32_t i = 0; (i < 32) && (glGetError() != GL_NO_ERROR); ++i) {}
+}
 
 //------------------------------------------------------------------------------------------------------------------------------------------
 // GL state changes, skipping redundant ones
@@ -273,8 +324,19 @@ static void setScissorTest(const bool bScissorTest) noexcept {
     }
 }
 
+// OpenGL ES 2.0 (no VAOs): enables vertex attributes 0 to 'numAttribs - 1' and disables the rest
+static void setNumEnabledVertexAttribs(const GLuint numAttribs) noexcept {
+    while (gNumEnabledAttribs < numAttribs) {
+        glEnableVertexAttribArray(gNumEnabledAttribs++);
+    }
+
+    while (gNumEnabledAttribs > numAttribs) {
+        glDisableVertexAttribArray(--gNumEnabledAttribs);
+    }
+}
+
 //------------------------------------------------------------------------------------------------------------------------------------------
-// Waits until the GPU has signalled a fence and deletes it
+// Waits until the GPU has signalled a fence and deletes it (OpenGL ES 3.0)
 //------------------------------------------------------------------------------------------------------------------------------------------
 static void waitForAndDeleteFence(GLsync& fence) noexcept {
     if (!fence)
@@ -292,25 +354,34 @@ static void waitForAndDeleteFence(GLsync& fence) noexcept {
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
-// Texture helpers
+// Texture and framebuffer helpers
 //------------------------------------------------------------------------------------------------------------------------------------------
 void bindTextureForUpload(const GLuint texture) noexcept {
     glActiveTexture(GL_TEXTURE0 + TEX_UNIT_UPLOAD);
     glBindTexture(GL_TEXTURE_2D, texture);
 }
 
-static GLuint createTexture2d(const GLenum internalFormat, const GLsizei width, const GLsizei height) noexcept {
+static GLuint createTexture2d(const TexFormat& format, const GLsizei width, const GLsizei height) noexcept {
     GLuint texture = 0;
     glGenTextures(1, &texture);
     bindTextureForUpload(texture);
-    glTexStorage2D(GL_TEXTURE_2D, 1, internalFormat, width, height);
 
-    // Note: integer textures are only complete with nearest filtering
+    if (isGles3()) {
+        glTexStorage2D(GL_TEXTURE_2D, 1, format.internalFormat, width, height);
+    } else {
+        glTexImage2D(GL_TEXTURE_2D, 0, (GLint) format.internalFormat, width, height, 0, format.format, format.type, nullptr);
+    }
+
+    // Note: integer textures are only complete with nearest filtering, and OpenGL ES 2.0 only allows clamping for non power of two sizes
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     return texture;
+}
+
+GLuint createRgba8Texture(const uint32_t width, const uint32_t height) noexcept {
+    return createTexture2d(gRgba8Format, (GLsizei) width, (GLsizei) height);
 }
 
 static void deleteTexture(GLuint& texture, const bool bContextLost) noexcept {
@@ -337,7 +408,23 @@ static void deleteRenderbuffer(GLuint& renderbuffer, const bool bContextLost) no
     renderbuffer = 0;
 }
 
-// Makes a framebuffer drawing to the given texture, with the given MSAA mode and sample count
+static void deleteBuffer(GLuint& buffer, const bool bContextLost) noexcept {
+    if (buffer && (!bContextLost)) {
+        glDeleteBuffers(1, &buffer);
+    }
+
+    buffer = 0;
+}
+
+static void deleteVertexArray(GLuint& vao, const bool bContextLost) noexcept {
+    if (vao && (!bContextLost)) {
+        glDeleteVertexArrays(1, &vao);
+    }
+
+    vao = 0;
+}
+
+// Makes a framebuffer drawing to the given texture, with the given MSAA mode and sample count (render to texture modes only)
 static GLuint createTextureFbo(const GLuint texture, const MsaaMode msaaMode, const GLsizei numSamples) noexcept {
     GLuint fbo = 0;
     glGenFramebuffers(1, &fbo);
@@ -359,114 +446,245 @@ static bool isBoundFramebufferComplete() noexcept {
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
-// Device capabilities: decides the color format of the frames drawn and how MSAA is done
+// MSAA with a multisampled renderbuffer: storage, resolve and discard for each of the ways it can be done.
+// Note: the read and draw framebuffer binding points of ANGLE_framebuffer_blit, NV_framebuffer_blit and APPLE_framebuffer_multisample
+// have the same enums as those of OpenGL ES 3.0.
+//------------------------------------------------------------------------------------------------------------------------------------------
+static void renderbufferStorageMultisample(
+    const MsaaMode msaaMode,
+    const GLsizei numSamples,
+    const GLenum format,
+    const GLsizei width,
+    const GLsizei height
+) noexcept {
+    switch (msaaMode) {
+        case MsaaMode::Renderbuffer:        glRenderbufferStorageMultisample(GL_RENDERBUFFER, numSamples, format, width, height);       break;
+        case MsaaMode::RenderbufferAngle:   glRenderbufferStorageMultisampleANGLE(GL_RENDERBUFFER, numSamples, format, width, height);  break;
+        case MsaaMode::RenderbufferNv:      glRenderbufferStorageMultisampleNV(GL_RENDERBUFFER, numSamples, format, width, height);     break;
+        case MsaaMode::RenderbufferApple:   glRenderbufferStorageMultisampleAPPLE(GL_RENDERBUFFER, numSamples, format, width, height);  break;
+        default: break;
+    }
+}
+
+// Resolves all of the samples of one framebuffer into another of the same size.
+// ANGLE (Vulkan) turns a resolve done right after drawing, covering the whole framebuffer and with no scissor, into a resolve attachment
+// of the render pass: the samples then stay in tile memory, as with multisampled render to texture.
+static void resolveMultisample(const MsaaMode msaaMode, const GLuint srcFbo, const GLuint dstFbo, const GLint width, const GLint height) noexcept {
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, srcFbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, dstFbo);
+
+    switch (msaaMode) {
+        case MsaaMode::Renderbuffer:
+            glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            break;
+
+        case MsaaMode::RenderbufferAngle:
+            glBlitFramebufferANGLE(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            break;
+
+        case MsaaMode::RenderbufferNv:
+            glBlitFramebufferNV(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            break;
+
+        case MsaaMode::RenderbufferApple:
+            glResolveMultisampleFramebufferAPPLE();
+            break;
+
+        default:
+            break;
+    }
+}
+
+// Tells the driver the contents of the color attachment of a framebuffer are not needed anymore, so they are never written to memory
+static void discardColorAttachment(const GLuint fbo) noexcept {
+    const GLenum attachment = GL_COLOR_ATTACHMENT0;
+
+    if (isGles3()) {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+        glInvalidateFramebuffer(GL_READ_FRAMEBUFFER, 1, &attachment);
+    } else if (gCaps.bDiscardFramebuffer) {
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glDiscardFramebufferEXT(GL_FRAMEBUFFER, 1, &attachment);
+    }
+}
+
+//------------------------------------------------------------------------------------------------------------------------------------------
+// Device capabilities: decides the texture formats, the color format of the frames drawn and how MSAA is done
 //------------------------------------------------------------------------------------------------------------------------------------------
 
-// Tells if frames can be drawn with the given format and MSAA, by making a small framebuffer
-static bool canDrawWith(const GLenum colorFormat, const MsaaMode msaaMode, const GLsizei numSamples) noexcept {
-    const GLuint texture = createTexture2d(colorFormat, 64, 64);
-    GLuint fbo = 0;
-    GLuint renderbuffer = 0;
-    bool bComplete = false;
+// Tells if frames can be drawn with the given format and MSAA, by making a small framebuffer (and resolving it, for renderbuffers)
+static bool canDrawWith(const TexFormat& colorFormat, const MsaaMode msaaMode, const GLsizei numSamples) noexcept {
+    constexpr GLsizei TEST_SIZE = 64;
 
-    if (msaaMode == MsaaMode::Renderbuffer) {
+    if (isRenderbufferMsaa(msaaMode) && (!colorFormat.renderbufferFormat))
+        return false;
+
+    clearGlErrors();
+    GLuint texture = createTexture2d(colorFormat, TEST_SIZE, TEST_SIZE);
+    GLuint fbo = 0;
+    GLuint msaaFbo = 0;
+    GLuint renderbuffer = 0;
+    bool bOk = false;
+
+    if (isRenderbufferMsaa(msaaMode)) {
         glGenRenderbuffers(1, &renderbuffer);
         glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
-        glRenderbufferStorageMultisample(GL_RENDERBUFFER, numSamples, colorFormat, 64, 64);
-        glGenFramebuffers(1, &fbo);
-        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        renderbufferStorageMultisample(msaaMode, numSamples, colorFormat.renderbufferFormat, TEST_SIZE, TEST_SIZE);
+        glGenFramebuffers(1, &msaaFbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, msaaFbo);
         glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, renderbuffer);
-        bComplete = isBoundFramebufferComplete();
+        bOk = isBoundFramebufferComplete();
 
-        // The texture the samples are resolved to must also be a valid color attachment
-        if (bComplete) {
-            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, 0);
-            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
-            bComplete = isBoundFramebufferComplete();
+        // The texture the samples are resolved to must also be a valid color attachment, and the resolve must be allowed
+        // (the formats must match, which completeness doesn't tell)
+        if (bOk) {
+            fbo = createTextureFbo(texture, MsaaMode::None, 1);
+            bOk = isBoundFramebufferComplete();
+        }
+
+        if (bOk) {
+            glBindFramebuffer(GL_FRAMEBUFFER, msaaFbo);
+            glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            resolveMultisample(msaaMode, msaaFbo, fbo, TEST_SIZE, TEST_SIZE);
+            bOk = (glGetError() == GL_NO_ERROR);
         }
     } else {
         fbo = createTextureFbo(texture, msaaMode, numSamples);
-        bComplete = isBoundFramebufferComplete();
+        bOk = isBoundFramebufferComplete() && (glGetError() == GL_NO_ERROR);
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     deleteFramebuffer(fbo, false);
+    deleteFramebuffer(msaaFbo, false);
     deleteRenderbuffer(renderbuffer, false);
-    GLuint textureToDelete = texture;
-    deleteTexture(textureToDelete, false);
-    glGetError();   // Clear any errors from formats or sample counts that are not supported
-    return bComplete;
+    deleteTexture(texture, false);
+    clearGlErrors();    // Formats or sample counts that are not supported
+    return bOk;
 }
 
-// The most samples a format supports for a multisampled renderbuffer
-static GLsizei getMaxRenderbufferSamples(const GLenum colorFormat) noexcept {
+// OpenGL ES 3.0: the most samples a format supports for a multisampled renderbuffer
+static GLsizei getMaxRenderbufferSamples(const GLenum format) noexcept {
     GLint numSampleCounts = 0;
-    glGetInternalformativ(GL_RENDERBUFFER, colorFormat, GL_NUM_SAMPLE_COUNTS, 1, &numSampleCounts);
+    glGetInternalformativ(GL_RENDERBUFFER, format, GL_NUM_SAMPLE_COUNTS, 1, &numSampleCounts);
 
     if (numSampleCounts <= 0)
         return 1;
 
     std::vector<GLint> sampleCounts((size_t) numSampleCounts);
-    glGetInternalformativ(GL_RENDERBUFFER, colorFormat, GL_SAMPLES, numSampleCounts, sampleCounts.data());
+    glGetInternalformativ(GL_RENDERBUFFER, format, GL_SAMPLES, numSampleCounts, sampleCounts.data());
     return std::max(*std::max_element(sampleCounts.begin(), sampleCounts.end()), 1);   // Note: listed in descending order, but be safe
+}
+
+// The most samples an MSAA mode can do with a format
+static GLsizei getMaxSamples(const MsaaMode msaaMode, const TexFormat& colorFormat) noexcept {
+    // Note: GL_MAX_SAMPLES_EXT, GL_MAX_SAMPLES_ANGLE, GL_MAX_SAMPLES_NV and GL_MAX_SAMPLES_APPLE are the same enum as GL_MAX_SAMPLES
+    GLint maxSamples = 0;
+    glGetIntegerv((msaaMode == MsaaMode::RenderToTextureImg) ? GL_MAX_SAMPLES_IMG : GL_MAX_SAMPLES, &maxSamples);
+
+    if ((msaaMode == MsaaMode::Renderbuffer) && colorFormat.renderbufferFormat) {
+        maxSamples = std::min(maxSamples, getMaxRenderbufferSamples(colorFormat.renderbufferFormat));
+    }
+
+    clearGlErrors();
+    return std::max<GLsizei>(maxSamples, 1);
+}
+
+// The ways MSAA can be done on this driver, best first: everything is checked through the extensions (OpenGL ES 2.0 has no MSAA of its
+// own, ANGLE has its own extensions for it), plus the multisampled renderbuffers of OpenGL ES 3.0.
+static std::vector<MsaaMode> getMsaaModeCandidates() noexcept {
+    std::vector<MsaaMode> modes;
+
+    if (GLAD_GL_EXT_multisampled_render_to_texture && glFramebufferTexture2DMultisampleEXT) {
+        modes.push_back(MsaaMode::RenderToTextureExt);
+    }
+
+    if (GLAD_GL_IMG_multisampled_render_to_texture && glFramebufferTexture2DMultisampleIMG) {
+        modes.push_back(MsaaMode::RenderToTextureImg);
+    }
+
+    if (isGles3()) {
+        modes.push_back(MsaaMode::Renderbuffer);
+    }
+
+    if (GLAD_GL_ANGLE_framebuffer_multisample && GLAD_GL_ANGLE_framebuffer_blit && glRenderbufferStorageMultisampleANGLE && glBlitFramebufferANGLE) {
+        modes.push_back(MsaaMode::RenderbufferAngle);
+    }
+
+    if (GLAD_GL_NV_framebuffer_multisample && GLAD_GL_NV_framebuffer_blit && glRenderbufferStorageMultisampleNV && glBlitFramebufferNV) {
+        modes.push_back(MsaaMode::RenderbufferNv);
+    }
+
+    if (GLAD_GL_APPLE_framebuffer_multisample && glRenderbufferStorageMultisampleAPPLE && glResolveMultisampleFramebufferAPPLE) {
+        modes.push_back(MsaaMode::RenderbufferApple);
+    }
+
+    return modes;
+}
+
+static const char* getMsaaModeName(const MsaaMode msaaMode) noexcept {
+    switch (msaaMode) {
+        case MsaaMode::RenderToTextureExt:  return "EXT_multisampled_render_to_texture";
+        case MsaaMode::RenderToTextureImg:  return "IMG_multisampled_render_to_texture";
+        case MsaaMode::Renderbuffer:        return "renderbuffer + blit";
+        case MsaaMode::RenderbufferAngle:   return "ANGLE_framebuffer_multisample + ANGLE_framebuffer_blit";
+        case MsaaMode::RenderbufferNv:      return "NV_framebuffer_multisample + NV_framebuffer_blit";
+        case MsaaMode::RenderbufferApple:   return "APPLE_framebuffer_multisample";
+        default:                            return "off";
+    }
 }
 
 static void decideDrawFormatAndMsaa() noexcept {
     // Formats to try: 16-bit color like the Vulkan renderer (the PSX's precision when blending) unless 32-bit shading is wanted.
     // Dithering is turned off (see 'initGlState'): it would change the 16-bit color, which Vulkan does not do.
-    std::vector<GLenum> colorFormats;
+    std::vector<TexFormat> colorFormats;
 
-    if (!Config::gbUseVulkan32BitShading) {
-        colorFormats.push_back(GL_RGB5_A1);
+    if (isGles3()) {
+        if (!Config::gbUseVulkan32BitShading) {
+            colorFormats.push_back({ GL_RGB5_A1, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1, GL_RGB5_A1 });
+        }
+
+        colorFormats.push_back({ GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, GL_RGBA8 });
+    } else {
+        // OpenGL ES 2.0: RGBA8 renderbuffers need OES_rgb8_rgba8 (or ARM_rgba8)
+        if (!Config::gbUseVulkan32BitShading) {
+            colorFormats.push_back({ GL_RGBA, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1, GL_RGB5_A1 });
+        }
+
+        const bool bRgba8Renderbuffers = (GLAD_GL_OES_rgb8_rgba8 || GLAD_GL_ARM_rgba8);
+        colorFormats.push_back({ GL_RGBA, GL_RGBA, GL_UNSIGNED_BYTE, (GLenum)((bRgba8Renderbuffers) ? GL_RGBA8_OES : 0) });
     }
 
-    colorFormats.push_back(GL_RGBA8);
-
-    // MSAA mode: the tile based one where available
+    // MSAA: try each format, then each MSAA mode, with the most samples wanted and possible first, then fewer.
+    // The first combination that works is used: MSAA is preferred over 16-bit color, the tile based MSAA modes over the others.
     const int32_t wantedSamples = std::max(Config::gAAMultisamples, 1);
-    MsaaMode msaaMode = MsaaMode::None;
-    GLint maxSamples = 1;
 
     if (wantedSamples > 1) {
-        if (GLAD_GL_EXT_multisampled_render_to_texture && glFramebufferTexture2DMultisampleEXT) {
-            msaaMode = MsaaMode::RenderToTextureExt;
-            glGetIntegerv(GL_MAX_SAMPLES_EXT, &maxSamples);
-        } else if (GLAD_GL_IMG_multisampled_render_to_texture && glFramebufferTexture2DMultisampleIMG) {
-            msaaMode = MsaaMode::RenderToTextureImg;
-            glGetIntegerv(GL_MAX_SAMPLES_IMG, &maxSamples);
-        } else {
-            msaaMode = MsaaMode::Renderbuffer;
-            glGetIntegerv(GL_MAX_SAMPLES, &maxSamples);
-        }
-    }
+        const std::vector<MsaaMode> msaaModes = getMsaaModeCandidates();
 
-    // Try each format, with the most samples wanted and possible first, then fewer: the first combination that works is used.
-    // MSAA is preferred over 16-bit color.
-    for (const GLenum colorFormat : colorFormats) {
-        GLsizei maxSamplesForFormat = std::max(maxSamples, 1);
+        for (const TexFormat& colorFormat : colorFormats) {
+            for (const MsaaMode msaaMode : msaaModes) {
+                const GLsizei maxSamples = getMaxSamples(msaaMode, colorFormat);
+                GLsizei numSamples = 1;
 
-        if (msaaMode == MsaaMode::Renderbuffer) {
-            maxSamplesForFormat = std::min(maxSamplesForFormat, getMaxRenderbufferSamples(colorFormat));
-        }
+                while ((numSamples * 2 <= wantedSamples) && (numSamples * 2 <= maxSamples)) {
+                    numSamples *= 2;
+                }
 
-        GLsizei numSamples = 1;
-
-        while ((numSamples * 2 <= wantedSamples) && (numSamples * 2 <= maxSamplesForFormat)) {
-            numSamples *= 2;
-        }
-
-        for (; numSamples > 1; numSamples /= 2) {
-            if (canDrawWith(colorFormat, msaaMode, numSamples)) {
-                gDrawColorFormat = colorFormat;
-                gMsaaMode = msaaMode;
-                gNumSamples = numSamples;
-                return;
+                for (; numSamples > 1; numSamples /= 2) {
+                    if (canDrawWith(colorFormat, msaaMode, numSamples)) {
+                        gDrawColorFormat = colorFormat;
+                        gMsaaMode = msaaMode;
+                        gNumSamples = numSamples;
+                        return;
+                    }
+                }
             }
         }
     }
 
     // No MSAA (or not possible): the first format that works
-    for (const GLenum colorFormat : colorFormats) {
+    for (const TexFormat& colorFormat : colorFormats) {
         if (canDrawWith(colorFormat, MsaaMode::None, 1)) {
             gDrawColorFormat = colorFormat;
             gMsaaMode = MsaaMode::None;
@@ -478,40 +696,106 @@ static void decideDrawFormatAndMsaa() noexcept {
     FatalErrors::raise("GLES renderer: no color format can be drawn to!");
 }
 
-static void determineCaps() noexcept {
-    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &gMaxTextureSize);
-    glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &gUboOffsetAlignment);
-    gUboOffsetAlignment = std::max(gUboOffsetAlignment, 1);
+// Decides the formats of PSX VRAM etc.: R16UI with OpenGL ES 3.0. OpenGL ES 2.0 has no integer textures: 2 bytes per texel, RG8 if
+// there is EXT_texture_rg (renderable, so VRAM updates can be copied in by the GPU), otherwise luminance alpha.
+static void decideTextureFormats() noexcept {
+    if (isGles3()) {
+        gVramFormat = { GL_R16UI, GL_RED_INTEGER, GL_UNSIGNED_SHORT, 0 };
+        gGammaLutFormat = { GL_R8, GL_RED, GL_UNSIGNED_BYTE, 0 };
+        gRgba8Format = { GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, 0 };
+        return;
+    }
 
-    gDrawColorFormat = 0;
+    gVramFormat = { GL_LUMINANCE_ALPHA, GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE, 0 };
+    gGammaLutFormat = { GL_LUMINANCE, GL_LUMINANCE, GL_UNSIGNED_BYTE, 0 };
+    gRgba8Format = { GL_RGBA, GL_RGBA, GL_UNSIGNED_BYTE, 0 };
+
+    if (GLAD_GL_EXT_texture_rg) {
+        const TexFormat rg8Format = { GL_RG_EXT, GL_RG_EXT, GL_UNSIGNED_BYTE, 0 };
+        clearGlErrors();
+        GLuint texture = createTexture2d(rg8Format, 4, 4);
+        const bool bOk = (glGetError() == GL_NO_ERROR);
+        deleteTexture(texture, false);
+        clearGlErrors();
+
+        if (bOk) {
+            gVramFormat = rg8Format;
+        }
+    }
+}
+
+// Tells if fragment shaders have 'highp' floats (always with OpenGL ES 3.0)
+static bool hasHighpFragmentFloats() noexcept {
+    if (isGles3())
+        return true;
+
+    GLint range[2] = {};
+    GLint precision = 0;
+    glGetShaderPrecisionFormat(GL_FRAGMENT_SHADER, GL_HIGH_FLOAT, range, &precision);
+    clearGlErrors();
+    return (precision > 0);
+}
+
+// Gets what the device can do: returns 'false' if the renderer can't run on it
+static bool determineCaps() noexcept {
+    const char* const pVendor = (const char*) glGetString(GL_VENDOR);
+    const char* const pRenderer = (const char*) glGetString(GL_RENDERER);
+    const char* const pVersion = (const char*) glGetString(GL_VERSION);
+
+    gCaps = {};
+    gCaps.bAngle = (pRenderer && std::strstr(pRenderer, "ANGLE")) || (pVersion && std::strstr(pVersion, "ANGLE"));
+    gCaps.bUnpackSubimage = (isGles3() || GLAD_GL_EXT_unpack_subimage);
+    gCaps.bDiscardFramebuffer = ((!isGles3()) && GLAD_GL_EXT_discard_framebuffer && glDiscardFramebufferEXT);
+    gCaps.bHighpFragment = hasHighpFragmentFloats();
+
+    // OpenGL ES 2.0: the draw programs decode PSX VRAM with float arithmetic on coordinates up to 8192, which needs 'highp' floats
+    if (!gCaps.bHighpFragment) {
+        SDL_Log("PsyDoom GLES: no 'highp' floats in fragment shaders, the OpenGL ES 2.0 renderer can't be used on '%s'", pRenderer);
+        return false;
+    }
+
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &gMaxTextureSize);
+    gUboOffsetAlignment = 1;
+
+    if (isGles3()) {
+        glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &gUboOffsetAlignment);
+        gUboOffsetAlignment = std::max(gUboOffsetAlignment, 1);
+    }
+
+    decideTextureFormats();
+    gDrawColorFormat = {};
     gMsaaMode = MsaaMode::None;
     gNumSamples = 1;
     decideDrawFormatAndMsaa();
 
     // Sample rate shading as with Vulkan: the textures antialiased too, unless only the edges are wanted ('AntiAliasingEdgesOnly').
     // MSAA itself is nearly free on tile based GPUs, sample rate shading multiplies the fragment shading work by the sample count.
+    // OES_sample_shading needs OpenGL ES 3.0.
     gbPerSampleShading = (
+        isGles3() &&
         (gNumSamples > 1) &&
         (!Config::gbAAEdgesOnly) &&
         GLAD_GL_OES_sample_shading &&
         (glMinSampleShadingOES != nullptr)
     );
 
-    const char* const msaaModeStr = (gMsaaMode == MsaaMode::RenderToTextureExt) ? "EXT_multisampled_render_to_texture" :
-        (gMsaaMode == MsaaMode::RenderToTextureImg) ? "IMG_multisampled_render_to_texture" :
-        (gMsaaMode == MsaaMode::Renderbuffer) ? "renderbuffer + blit" : "off";
+    const bool b16BitColor = (gDrawColorFormat.type == GL_UNSIGNED_SHORT_5_5_5_1);
 
     SDL_Log(
-        "PsyDoom GLES: %s | %s | %s | color %s | MSAA %dx (%s, wanted %dx)%s",
-        (const char*) glGetString(GL_VENDOR),
-        (const char*) glGetString(GL_RENDERER),
-        (const char*) glGetString(GL_VERSION),
-        (gDrawColorFormat == GL_RGB5_A1) ? "16-bit" : "32-bit",
+        "PsyDoom GLES: %s | %s | %s | OpenGL ES %s path%s | color %s | MSAA %dx (%s, wanted %dx)%s",
+        pVendor,
+        pRenderer,
+        pVersion,
+        (isGles3()) ? "3.0" : "2.0",
+        (gCaps.bAngle) ? " (ANGLE)" : "",
+        (b16BitColor) ? "16-bit" : "32-bit",
         (int) gNumSamples,
-        msaaModeStr,
+        getMsaaModeName(gMsaaMode),
         (int) std::max(Config::gAAMultisamples, 1),
         (gbPerSampleShading) ? ", sample rate shading" : ""
     );
+
+    return true;
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
@@ -559,10 +843,10 @@ static bool ensureFrameHistory() noexcept {
         glClear(GL_COLOR_BUFFER_BIT);
     }
 
-    if (gMsaaMode == MsaaMode::Renderbuffer) {
+    if (isRenderbufferMsaa(gMsaaMode)) {
         glGenRenderbuffers(1, &gMsaaRenderbuffer);
         glBindRenderbuffer(GL_RENDERBUFFER, gMsaaRenderbuffer);
-        glRenderbufferStorageMultisample(GL_RENDERBUFFER, gNumSamples, gDrawColorFormat, (GLsizei) fbW, (GLsizei) fbH);
+        renderbufferStorageMultisample(gMsaaMode, gNumSamples, gDrawColorFormat.renderbufferFormat, (GLsizei) fbW, (GLsizei) fbH);
         glGenFramebuffers(1, &gMsaaFbo);
         glBindFramebuffer(GL_FRAMEBUFFER, gMsaaFbo);
         glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, gMsaaRenderbuffer);
@@ -610,48 +894,99 @@ static void fitPsxVramToMaxTextureSize() noexcept {
     }
 }
 
-// Uploads an area of PSX VRAM straight from the PSX GPU's memory to the texture
+// Uploads an area of PSX VRAM straight from the PSX GPU's memory to a texture of the VRAM format.
+// Without GL_UNPACK_ROW_LENGTH (OpenGL ES 2.0 without EXT_unpack_subimage) the rows are gathered first, unless they are whole rows.
 static void uploadVramRectDirect(const GLuint texture, const GLint dstX, const GLint dstY, const VramRect& rect) noexcept {
     const Gpu::Core& psxGpu = PsxVm::gGpu;
     bindTextureForUpload(texture);
-    glPixelStorei(GL_UNPACK_ROW_LENGTH, psxGpu.ramPixelW);
-    glPixelStorei(GL_UNPACK_SKIP_PIXELS, rect.x);
-    glPixelStorei(GL_UNPACK_SKIP_ROWS, rect.y);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, dstX, dstY, rect.w, rect.h, GL_RED_INTEGER, GL_UNSIGNED_SHORT, psxGpu.pRam);
-    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-    glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
-    glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+
+    if (rect.w == psxGpu.ramPixelW) {
+        const uint16_t* const pSrc = psxGpu.pRam + (size_t) rect.y * psxGpu.ramPixelW;
+        glTexSubImage2D(GL_TEXTURE_2D, 0, dstX, dstY, rect.w, rect.h, gVramFormat.format, gVramFormat.type, pSrc);
+    } else if (gCaps.bUnpackSubimage) {
+        // Note: the EXT_unpack_subimage enums are the same as those of OpenGL ES 3.0
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, psxGpu.ramPixelW);
+        glPixelStorei(GL_UNPACK_SKIP_PIXELS, rect.x);
+        glPixelStorei(GL_UNPACK_SKIP_ROWS, rect.y);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, dstX, dstY, rect.w, rect.h, gVramFormat.format, gVramFormat.type, psxGpu.pRam);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+        glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+    } else {
+        gVramUploadRows.resize((size_t) rect.w * rect.h);
+
+        for (uint32_t y = 0; y < rect.h; ++y) {
+            std::memcpy(
+                gVramUploadRows.data() + (size_t) y * rect.w,
+                psxGpu.pRam + (size_t)(rect.y + y) * psxGpu.ramPixelW + rect.x,
+                (size_t) rect.w * sizeof(uint16_t)
+            );
+        }
+
+        glTexSubImage2D(GL_TEXTURE_2D, 0, dstX, dstY, rect.w, rect.h, gVramFormat.format, gVramFormat.type, gVramUploadRows.data());
+    }
 }
 
-static void initVram() noexcept {
-    Gpu::Core& psxGpu = PsxVm::gGpu;
-    gVramTex = createTexture2d(GL_R16UI, psxGpu.ramPixelW, psxGpu.ramPixelH);
-    uploadVramRectDirect(gVramTex, 0, 0, VramRect{ 0, 0, psxGpu.ramPixelW, psxGpu.ramPixelH });
-    gPendingVramRects.clear();
-    gbVramFullUploadPending = false;
+// Copies an area of a staging texture into VRAM on the GPU (the staging texture's framebuffer is bound for reading)
+static void copyStagingToVram(const VramBlit& blit) noexcept {
+    if (isGles3()) {
+        glBlitFramebuffer(
+            blit.srcX, blit.srcY, blit.srcX + blit.w, blit.srcY + blit.h,
+            blit.dstX, blit.dstY, blit.dstX + blit.w, blit.dstY + blit.h,
+            GL_COLOR_BUFFER_BIT,
+            GL_NEAREST
+        );
+    } else {
+        // OpenGL ES 2.0: no blits, but a copy from the framebuffer bound into a texture
+        glCopyTexSubImage2D(GL_TEXTURE_2D, 0, blit.dstX, blit.dstY, blit.srcX, blit.srcY, blit.w, blit.h);
+    }
+}
 
-    // VRAM as a color attachment, for the GPU to copy updates into it from the staging textures
-    glGenFramebuffers(1, &gVramFbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, gVramFbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gVramTex, 0);
-    gbStagedVramUpdates = isBoundFramebufferComplete();
+// Binds a staging texture's framebuffer for reading and VRAM as where copies go
+static void bindStagingForCopy(const uint32_t stagingIdx) noexcept {
+    if (isGles3()) {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, gStagingFbo[stagingIdx]);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gVramFbo);
+    } else {
+        glBindFramebuffer(GL_FRAMEBUFFER, gStagingFbo[stagingIdx]);
+        bindTextureForUpload(gVramTex);
+    }
+}
 
-    for (uint32_t i = 0; (i < NUM_STAGING_TEX) && gbStagedVramUpdates; ++i) {
-        gStagingTex[i] = createTexture2d(GL_R16UI, STAGING_TEX_W, STAGING_TEX_H);
+// Sets up the staging textures (VRAM must exist): returns 'false' if VRAM updates can't be copied in by the GPU.
+//  - OpenGL ES 3.0: VRAM (R16UI) is a color attachment, copies are blits.
+//  - OpenGL ES 2.0: copies are 'glCopyTexSubImage2D' from the staging texture's framebuffer, so the format must be renderable (RG8).
+static bool initStagingTextures() noexcept {
+    if (isGles3()) {
+        glGenFramebuffers(1, &gVramFbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, gVramFbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gVramTex, 0);
+
+        if (!isBoundFramebufferComplete())
+            return false;
+    } else if (gVramFormat.format != GL_RG_EXT) {
+        return false;
+    }
+
+    for (uint32_t i = 0; i < NUM_STAGING_TEX; ++i) {
+        gStagingTex[i] = createTexture2d(gVramFormat, STAGING_TEX_W, STAGING_TEX_H);
         gStagingFbo[i] = createTextureFbo(gStagingTex[i], MsaaMode::None, 1);
-        gbStagedVramUpdates &= isBoundFramebufferComplete();
+
+        if (!isBoundFramebufferComplete())
+            return false;
     }
 
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    gStagingIdx = 0;
+    // OpenGL ES 2.0: make sure a copy works, before VRAM gets its contents
+    if (!isGles3()) {
+        clearGlErrors();
+        bindStagingForCopy(0);
+        copyStagingToVram(VramBlit{ 0, 0, 0, 0, 1, 1 });
 
-    if (!gbStagedVramUpdates) {
-        SDL_Log("PsyDoom GLES: PSX VRAM can't be a color attachment, updates to it are uploaded directly");
+        if (glGetError() != GL_NO_ERROR)
+            return false;
     }
 
-    // VRAM stays bound to its texture unit for good
-    glActiveTexture(GL_TEXTURE0 + GShaders::TEX_UNIT_VRAM);
-    glBindTexture(GL_TEXTURE_2D, gVramTex);
+    return true;
 }
 
 static void destroyVram(const bool bContextLost) noexcept {
@@ -664,8 +999,46 @@ static void destroyVram(const bool bContextLost) noexcept {
     deleteTexture(gVramTex, bContextLost);
     gPendingVramRects.clear();
     gVramBlits.clear();
+    gVramUploadRows.clear();
+    gVramUploadRows.shrink_to_fit();
     gbVramFullUploadPending = false;
     gbStagedVramUpdates = false;
+}
+
+static void initVram() noexcept {
+    Gpu::Core& psxGpu = PsxVm::gGpu;
+    gVramTex = createTexture2d(gVramFormat, psxGpu.ramPixelW, psxGpu.ramPixelH);
+    gPendingVramRects.clear();
+    gbVramFullUploadPending = false;
+    gStagingIdx = 0;
+
+    // The GPU copies VRAM updates in from the staging textures where possible
+    gbStagedVramUpdates = initStagingTextures();
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    clearGlErrors();
+
+    if (!gbStagedVramUpdates) {
+        SDL_Log("PsyDoom GLES: PSX VRAM can't be copied into by the GPU, updates to it are uploaded directly");
+
+        for (uint32_t i = 0; i < NUM_STAGING_TEX; ++i) {
+            deleteFramebuffer(gStagingFbo[i], false);
+            deleteTexture(gStagingTex[i], false);
+        }
+
+        deleteFramebuffer(gVramFbo, false);
+    }
+
+    uploadVramRectDirect(gVramTex, 0, 0, VramRect{ 0, 0, psxGpu.ramPixelW, psxGpu.ramPixelH });
+
+    // OpenGL ES 2.0: the draw programs read VRAM with normalized texture coordinates, so they need its size
+    if (!isGles3()) {
+        GShaders::setVramSize(psxGpu.ramPixelW, psxGpu.ramPixelH);
+        invalidateStateCache();
+    }
+
+    // VRAM stays bound to its texture unit for good
+    glActiveTexture(GL_TEXTURE0 + GShaders::TEX_UNIT_VRAM);
+    glBindTexture(GL_TEXTURE_2D, gVramTex);
 }
 
 // Copies the areas placed in the current staging texture into VRAM, on the GPU
@@ -674,16 +1047,10 @@ static void flushVramBlits() noexcept {
         return;
 
     setScissorTest(false);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, gStagingFbo[gStagingIdx]);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gVramFbo);
+    bindStagingForCopy(gStagingIdx);
 
     for (const VramBlit& blit : gVramBlits) {
-        glBlitFramebuffer(
-            blit.srcX, blit.srcY, blit.srcX + blit.w, blit.srcY + blit.h,
-            blit.dstX, blit.dstY, blit.dstX + blit.w, blit.dstY + blit.h,
-            GL_COLOR_BUFFER_BIT,
-            GL_NEAREST
-        );
+        copyStagingToVram(blit);
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -758,63 +1125,81 @@ static void applyPendingVramUpdates() noexcept {
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
-// Streaming buffers (vertices and uniforms of the frames of the main render path)
+// Vertex buffers: streaming buffers (vertices and uniforms of the frames of the main render path) and the corners of the post quads
 //------------------------------------------------------------------------------------------------------------------------------------------
-static void initStreamSlots() noexcept {
+
+// Points the draw vertex attributes at the bound vertex buffer: the 'VVertex_Draw' layout (see 'DECLARE_VS_INPUTS_VVERTEX_DRAW' in the
+// Vulkan shaders). OpenGL ES 2.0 has no integer attributes: they become floats (not normalized) there.
+static void setDrawVertexAttribPointers() noexcept {
     constexpr GLsizei STRIDE = (GLsizei) sizeof(VVertex_Draw);
     static_assert(sizeof(VVertex_Draw) == 40);
 
+    glVertexAttribPointer(GShaders::ATTRIB_POS, 3, GL_FLOAT, GL_FALSE, STRIDE, (const void*) offsetof(VVertex_Draw, x));
+    glVertexAttribPointer(GShaders::ATTRIB_UV, 2, GL_FLOAT, GL_FALSE, STRIDE, (const void*) offsetof(VVertex_Draw, u));
+
+    if (isGles3()) {
+        glVertexAttribIPointer(GShaders::ATTRIB_COLOR_LIGHTDIM, 4, GL_UNSIGNED_BYTE, STRIDE, (const void*) offsetof(VVertex_Draw, r));
+        glVertexAttribIPointer(GShaders::ATTRIB_TEXWIN_POS, 2, GL_UNSIGNED_SHORT, STRIDE, (const void*) offsetof(VVertex_Draw, texWinX));
+        glVertexAttribIPointer(GShaders::ATTRIB_TEXWIN_SIZE, 2, GL_UNSIGNED_SHORT, STRIDE, (const void*) offsetof(VVertex_Draw, texWinW));
+        glVertexAttribIPointer(GShaders::ATTRIB_CLUT_POS, 2, GL_UNSIGNED_SHORT, STRIDE, (const void*) offsetof(VVertex_Draw, clutX));
+        glVertexAttribIPointer(GShaders::ATTRIB_STMUL, 4, GL_UNSIGNED_BYTE, STRIDE, (const void*) offsetof(VVertex_Draw, stmulR));
+    } else {
+        glVertexAttribPointer(GShaders::ATTRIB_COLOR_LIGHTDIM, 4, GL_UNSIGNED_BYTE, GL_FALSE, STRIDE, (const void*) offsetof(VVertex_Draw, r));
+        glVertexAttribPointer(GShaders::ATTRIB_TEXWIN_POS, 2, GL_UNSIGNED_SHORT, GL_FALSE, STRIDE, (const void*) offsetof(VVertex_Draw, texWinX));
+        glVertexAttribPointer(GShaders::ATTRIB_TEXWIN_SIZE, 2, GL_UNSIGNED_SHORT, GL_FALSE, STRIDE, (const void*) offsetof(VVertex_Draw, texWinW));
+        glVertexAttribPointer(GShaders::ATTRIB_CLUT_POS, 2, GL_UNSIGNED_SHORT, GL_FALSE, STRIDE, (const void*) offsetof(VVertex_Draw, clutX));
+        glVertexAttribPointer(GShaders::ATTRIB_STMUL, 4, GL_UNSIGNED_BYTE, GL_FALSE, STRIDE, (const void*) offsetof(VVertex_Draw, stmulR));
+    }
+}
+
+static void initStreamSlots() noexcept {
     for (StreamSlot& slot : gStreamSlots) {
         slot = {};
         glGenBuffers(1, &slot.vbo);
-        glGenBuffers(1, &slot.ubo);
-        glGenVertexArrays(1, &slot.vao);
-
-        glBindVertexArray(slot.vao);
         glBindBuffer(GL_ARRAY_BUFFER, slot.vbo);
         slot.vboSize = 1024 * 1024;
         glBufferData(GL_ARRAY_BUFFER, slot.vboSize, nullptr, GL_STREAM_DRAW);
 
-        // The vertex layout: 'VVertex_Draw' (see 'DECLARE_VS_INPUTS_VVERTEX_DRAW' in the Vulkan shaders)
-        for (GLuint attrib = 0; attrib <= 6; ++attrib) {
-            glEnableVertexAttribArray(attrib);
+        // OpenGL ES 3.0: a VAO per slot and the uniform buffer (OpenGL ES 2.0 sets the attributes and uniforms as it draws)
+        if (isGles3()) {
+            glGenVertexArrays(1, &slot.vao);
+            glBindVertexArray(slot.vao);
+
+            for (GLuint attrib = 0; attrib < GShaders::NUM_DRAW_ATTRIBS; ++attrib) {
+                glEnableVertexAttribArray(attrib);
+            }
+
+            setDrawVertexAttribPointers();
+            glBindVertexArray(0);
+
+            glGenBuffers(1, &slot.ubo);
+            glBindBuffer(GL_UNIFORM_BUFFER, slot.ubo);
+            slot.uboSize = 16 * 1024;
+            glBufferData(GL_UNIFORM_BUFFER, slot.uboSize, nullptr, GL_STREAM_DRAW);
+            glBindBuffer(GL_UNIFORM_BUFFER, 0);
         }
-
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, STRIDE, (const void*) offsetof(VVertex_Draw, x));
-        glVertexAttribIPointer(1, 4, GL_UNSIGNED_BYTE, STRIDE, (const void*) offsetof(VVertex_Draw, r));
-        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, STRIDE, (const void*) offsetof(VVertex_Draw, u));
-        glVertexAttribIPointer(3, 2, GL_UNSIGNED_SHORT, STRIDE, (const void*) offsetof(VVertex_Draw, texWinX));
-        glVertexAttribIPointer(4, 2, GL_UNSIGNED_SHORT, STRIDE, (const void*) offsetof(VVertex_Draw, texWinW));
-        glVertexAttribIPointer(5, 2, GL_UNSIGNED_SHORT, STRIDE, (const void*) offsetof(VVertex_Draw, clutX));
-        glVertexAttribIPointer(6, 4, GL_UNSIGNED_BYTE, STRIDE, (const void*) offsetof(VVertex_Draw, stmulR));
-
-        glBindBuffer(GL_UNIFORM_BUFFER, slot.ubo);
-        slot.uboSize = 16 * 1024;
-        glBufferData(GL_UNIFORM_BUFFER, slot.uboSize, nullptr, GL_STREAM_DRAW);
     }
 
-    glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
-    glBindBuffer(GL_UNIFORM_BUFFER, 0);
     gStreamSlotIdx = 0;
 }
 
 static void destroyStreamSlots(const bool bContextLost) noexcept {
     for (StreamSlot& slot : gStreamSlots) {
-        if (!bContextLost) {
+        if ((!bContextLost) && isGles3()) {
             waitForAndDeleteFence(slot.fence);
-            glDeleteVertexArrays(1, &slot.vao);
-            glDeleteBuffers(1, &slot.ubo);
-            glDeleteBuffers(1, &slot.vbo);
         }
 
+        deleteVertexArray(slot.vao, bContextLost);
+        deleteBuffer(slot.ubo, bContextLost);
+        deleteBuffer(slot.vbo, bContextLost);
         slot = {};
     }
 
     gStreamSlotIdx = 0;
 }
 
-// Uploads data to a buffer the GPU no longer uses (its fence was waited on), growing it if needed
+// OpenGL ES 3.0: uploads data to a buffer the GPU no longer uses (its fence was waited on), growing it if needed
 static void uploadToStreamBuffer(const GLenum target, const GLuint buffer, GLsizeiptr& bufferSize, const void* const pData, const GLsizeiptr size) noexcept {
     glBindBuffer(target, buffer);
 
@@ -825,6 +1210,43 @@ static void uploadToStreamBuffer(const GLenum target, const GLuint buffer, GLsiz
 
     if (size > 0) {
         glBufferSubData(target, 0, size, pData);
+    }
+}
+
+// The corners of the quads drawn by the post programs, as a 4 vertex triangle strip: top left, top right, bottom left, bottom right
+static void initQuadVertices() noexcept {
+    static constexpr float CORNERS[8] = { 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f };
+
+    glGenBuffers(1, &gQuadVbo);
+    glBindBuffer(GL_ARRAY_BUFFER, gQuadVbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(CORNERS), CORNERS, GL_STATIC_DRAW);
+
+    if (isGles3()) {
+        glGenVertexArrays(1, &gQuadVao);
+        glBindVertexArray(gQuadVao);
+        glEnableVertexAttribArray(GShaders::ATTRIB_CORNER);
+        glVertexAttribPointer(GShaders::ATTRIB_CORNER, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+        glBindVertexArray(0);
+    }
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+}
+
+static void bindQuadVertices() noexcept {
+    if (isGles3()) {
+        glBindVertexArray(gQuadVao);
+    } else {
+        glBindBuffer(GL_ARRAY_BUFFER, gQuadVbo);
+        glVertexAttribPointer(GShaders::ATTRIB_CORNER, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+        setNumEnabledVertexAttribs(1);
+    }
+}
+
+static void unbindQuadVertices() noexcept {
+    if (isGles3()) {
+        glBindVertexArray(0);
+    } else {
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
     }
 }
 
@@ -855,7 +1277,8 @@ static PipelineState getPipelineState(const VPipelineType_Main pipelineType) noe
     }
 }
 
-// Packs the frame's uniforms for upload: the first block is zeroed (bound before any uniforms are set), the frame's ones follow it
+// OpenGL ES 3.0: packs the frame's uniforms for upload: the first block is zeroed (bound before any uniforms are set), the frame's ones
+// follow it.
 static GLsizeiptr packFrameUniforms(const VDrawing::FrameDrawData& frameData, const GLsizeiptr blockStride) noexcept {
     const GLsizeiptr totalSize = blockStride * ((GLsizeiptr) frameData.numUniforms + 1);
     gUniformUploadBuffer.assign((size_t) totalSize, std::byte(0));
@@ -876,19 +1299,63 @@ static GLsizeiptr packFrameUniforms(const VDrawing::FrameDrawData& frameData, co
     return totalSize;
 }
 
+// OpenGL ES 2.0: changes the draw uniforms in effect (the programs get them before their next draw)
+static void setDrawUniforms(const VShaderUniforms_Draw& uniforms) noexcept {
+    gpDrawUniforms = &uniforms;
+    ++gDrawUniformsSerial;
+}
+
+// OpenGL ES 2.0: gives a draw program the draw uniforms in effect, if it doesn't have them already
+static void applyDrawUniforms(const GProgram program) noexcept {
+    const uint32_t programIdx = (uint32_t) program;
+    ASSERT(programIdx < NUM_DRAW_PROGRAMS);
+
+    if (gProgramUniformsSerial[programIdx] == gDrawUniformsSerial)
+        return;
+
+    gProgramUniformsSerial[programIdx] = gDrawUniformsSerial;
+    const GProgramInfo& info = GShaders::get(program);
+    const VShaderUniforms_Draw& uniforms = *gpDrawUniforms;
+
+    if (info.uMvpMatrix >= 0) {
+        glUniformMatrix4fv(info.uMvpMatrix, 1, GL_FALSE, reinterpret_cast<const GLfloat*>(&uniforms.mvpMatrix));
+    }
+
+    if (info.uNdcToPsxScale >= 0) {
+        glUniform2f(info.uNdcToPsxScale, uniforms.ndcToPsxScaleX, uniforms.ndcToPsxScaleY);
+    }
+
+    if (info.uPsxNdcOffset >= 0) {
+        glUniform2f(info.uPsxNdcOffset, uniforms.psxNdcOffsetX, uniforms.psxNdcOffsetY);
+    }
+
+    if (info.uInvDrawRes >= 0) {
+        glUniform2f(info.uInvDrawRes, uniforms.invDrawResX, uniforms.invDrawResY);
+    }
+}
+
 // Draws the frame recorded by 'VDrawing' into the frame history texture at the given index
 static void drawMainFrame(const VDrawing::FrameDrawData& frameData, const uint32_t historyIdx) noexcept {
-    // Get the buffers for this frame, waiting until the GPU is done with the frame that used them last (normally long done)
     StreamSlot& slot = gStreamSlots[gStreamSlotIdx];
-    waitForAndDeleteFence(slot.fence);
+    const GLsizeiptr vertsSize = (GLsizeiptr) frameData.numVerts * (GLsizeiptr) sizeof(VVertex_Draw);
+    GLsizeiptr uniformBlockStride = 0;
 
-    const GLsizeiptr uniformBlockStride = ((GLsizeiptr) sizeof(DrawUniformBlock) + gUboOffsetAlignment - 1) / gUboOffsetAlignment * gUboOffsetAlignment;
-    const GLsizeiptr uniformsSize = packFrameUniforms(frameData, uniformBlockStride);
-    uploadToStreamBuffer(GL_UNIFORM_BUFFER, slot.ubo, slot.uboSize, gUniformUploadBuffer.data(), uniformsSize);
-    uploadToStreamBuffer(GL_ARRAY_BUFFER, slot.vbo, slot.vboSize, frameData.pVerts, (GLsizeiptr) frameData.numVerts * (GLsizeiptr) sizeof(VVertex_Draw));
+    if (isGles3()) {
+        // Get the buffers for this frame, waiting until the GPU is done with the frame that used them last (normally long done)
+        waitForAndDeleteFence(slot.fence);
+        uniformBlockStride = ((GLsizeiptr) sizeof(DrawUniformBlock) + gUboOffsetAlignment - 1) / gUboOffsetAlignment * gUboOffsetAlignment;
+        const GLsizeiptr uniformsSize = packFrameUniforms(frameData, uniformBlockStride);
+        uploadToStreamBuffer(GL_UNIFORM_BUFFER, slot.ubo, slot.uboSize, gUniformUploadBuffer.data(), uniformsSize);
+        uploadToStreamBuffer(GL_ARRAY_BUFFER, slot.vbo, slot.vboSize, frameData.pVerts, vertsSize);
+    } else if (vertsSize > 0) {
+        // OpenGL ES 2.0 has no fences: the buffer's storage is replaced ('orphaned') every frame, so the driver never waits on the GPU
+        glBindBuffer(GL_ARRAY_BUFFER, slot.vbo);
+        glBufferData(GL_ARRAY_BUFFER, vertsSize, frameData.pVerts, GL_STREAM_DRAW);
+        slot.vboSize = vertsSize;
+    }
 
     // Start the pass: clear everything first, so the GPU never loads the old contents into tile memory
-    const GLuint drawFbo = (gMsaaMode == MsaaMode::Renderbuffer) ? gMsaaFbo : gHistoryFbo[historyIdx];
+    const GLuint drawFbo = (isRenderbufferMsaa(gMsaaMode)) ? gMsaaFbo : gHistoryFbo[historyIdx];
     glBindFramebuffer(GL_FRAMEBUFFER, drawFbo);
     glViewport(0, 0, (GLsizei) gHistoryW, (GLsizei) gHistoryH);
     setScissorTest(false);
@@ -902,10 +1369,20 @@ static void drawMainFrame(const VDrawing::FrameDrawData& frameData, const uint32
     glScissor(viewportX, viewportY, viewportW, viewportH);
     setScissorTest(true);
 
+    // Vertices and the uniforms in effect before any are set (zeroed)
+    if (isGles3()) {
+        glBindVertexArray(slot.vao);
+        glBindBufferRange(GL_UNIFORM_BUFFER, GShaders::DRAW_UNIFORMS_BINDING, slot.ubo, 0, (GLsizeiptr) sizeof(DrawUniformBlock));
+    } else {
+        glBindBuffer(GL_ARRAY_BUFFER, slot.vbo);
+        setDrawVertexAttribPointers();
+        setNumEnabledVertexAttribs(GShaders::NUM_DRAW_ATTRIBS);
+        setDrawUniforms(gZeroDrawUniforms);
+    }
+
     // Replay the drawing commands
-    glBindVertexArray(slot.vao);
-    glBindBufferRange(GL_UNIFORM_BUFFER, GShaders::DRAW_UNIFORMS_BINDING, slot.ubo, 0, (GLsizeiptr) sizeof(DrawUniformBlock));
     GLenum primitiveType = GL_TRIANGLES;
+    GProgram program = GProgram::Colored;
 
     for (uint32_t cmdIdx = 0; cmdIdx < frameData.numCmds; ++cmdIdx) {
         const VDrawing::DrawCmd& cmd = frameData.pCmds[cmdIdx];
@@ -913,7 +1390,8 @@ static void drawMainFrame(const VDrawing::FrameDrawData& frameData, const uint32
         switch (cmd.type) {
             case VDrawing::DrawCmdType::SetPipeline: {
                 const PipelineState state = getPipelineState((VPipelineType_Main) cmd.arg1);
-                useProgram(GShaders::get(state.program).program);
+                program = state.program;
+                useProgram(GShaders::get(program).program);
                 setBlendMode(state.blendMode);
                 setCullFace(state.bCullBackFaces);
 
@@ -925,22 +1403,36 @@ static void drawMainFrame(const VDrawing::FrameDrawData& frameData, const uint32
             }   break;
 
             case VDrawing::DrawCmdType::SetUniforms: {
-                glBindBufferRange(
-                    GL_UNIFORM_BUFFER,
-                    GShaders::DRAW_UNIFORMS_BINDING,
-                    slot.ubo,
-                    uniformBlockStride * ((GLintptr) cmd.arg1 + 1),
-                    (GLsizeiptr) sizeof(DrawUniformBlock)
-                );
+                if (isGles3()) {
+                    glBindBufferRange(
+                        GL_UNIFORM_BUFFER,
+                        GShaders::DRAW_UNIFORMS_BINDING,
+                        slot.ubo,
+                        uniformBlockStride * ((GLintptr) cmd.arg1 + 1),
+                        (GLsizeiptr) sizeof(DrawUniformBlock)
+                    );
+                } else {
+                    setDrawUniforms(frameData.pUniforms[cmd.arg1]);
+                }
             }   break;
 
             case VDrawing::DrawCmdType::Draw: {
+                if (!isGles3()) {
+                    applyDrawUniforms(program);
+                }
+
                 glDrawArrays(primitiveType, (GLint) cmd.arg2, (GLsizei) cmd.arg1);
             }   break;
         }
     }
 
-    glBindVertexArray(0);
+    if (isGles3()) {
+        glBindVertexArray(0);
+    } else {
+        setNumEnabledVertexAttribs(0);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+    }
+
     setBlendMode(BlendMode::None);
     setCullFace(false);
 
@@ -948,24 +1440,20 @@ static void drawMainFrame(const VDrawing::FrameDrawData& frameData, const uint32
         setSampleShading(false);
     }
 
-    // MSAA with a renderbuffer: resolve into the frame's texture, then drop the samples so they are never written to memory
-    if (gMsaaMode == MsaaMode::Renderbuffer) {
+    // MSAA with a renderbuffer: resolve into the frame's texture right away (no scissor, the whole framebuffer: ANGLE does this in the
+    // render pass), then drop the samples so they are never written to memory.
+    if (isRenderbufferMsaa(gMsaaMode)) {
         setScissorTest(false);
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, gMsaaFbo);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gHistoryFbo[historyIdx]);
-        glBlitFramebuffer(
-            0, 0, (GLint) gHistoryW, (GLint) gHistoryH,
-            0, 0, (GLint) gHistoryW, (GLint) gHistoryH,
-            GL_COLOR_BUFFER_BIT,
-            GL_NEAREST
-        );
-
-        const GLenum attachment = GL_COLOR_ATTACHMENT0;
-        glInvalidateFramebuffer(GL_READ_FRAMEBUFFER, 1, &attachment);
+        resolveMultisample(gMsaaMode, gMsaaFbo, gHistoryFbo[historyIdx], (GLint) gHistoryW, (GLint) gHistoryH);
+        discardColorAttachment(gMsaaFbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
     }
 
-    // The GPU is done with this slot's buffers once it is past this point
-    slot.fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    // OpenGL ES 3.0: the GPU is done with this slot's buffers once it is past this point
+    if (isGles3()) {
+        slot.fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    }
+
     gStreamSlotIdx = (gStreamSlotIdx + 1) % NUM_STREAM_SLOTS;
 }
 
@@ -994,29 +1482,62 @@ static void unbindPostTextures() noexcept {
 static void bindPostTexture(const GLuint unit, const GLuint texture, const bool bLinearFilter) noexcept {
     glActiveTexture(GL_TEXTURE0 + unit);
     glBindTexture(GL_TEXTURE_2D, texture);
-    glBindSampler(unit, (bLinearFilter) ? gSamplerLinear : gSamplerNearest);
+
+    if (isGles3()) {
+        glBindSampler(unit, (bLinearFilter) ? gSamplerLinear : gSamplerNearest);
+    } else {
+        // No sampler objects: the filter is part of the texture
+        const GLint filter = (bLinearFilter) ? GL_LINEAR : GL_NEAREST;
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+    }
 }
 
-void drawFullscreenPost(const GProgram program, const GLuint srcTex, const GLuint srcTex2, const float lerp) noexcept {
+// Draws a quad with a post program: from 1 or 2 source textures
+static void drawPostQuad(
+    const GProgram program,
+    const float posRect[4],
+    const float uvRect[4],
+    const GLuint srcTex,
+    const GLuint srcTex2,
+    const float lerp,
+    const bool bLinearFilter
+) noexcept {
     const GProgramInfo& programInfo = GShaders::get(program);
     useProgram(programInfo.program);
     setBlendMode(BlendMode::None);
     setCullFace(false);
 
+    if (programInfo.uPosRect >= 0) {
+        glUniform4f(programInfo.uPosRect, posRect[0], posRect[1], posRect[2], posRect[3]);
+    }
+
+    if (programInfo.uUvRect >= 0) {
+        glUniform4f(programInfo.uUvRect, uvRect[0], uvRect[1], uvRect[2], uvRect[3]);
+    }
+
     if (programInfo.uLerp >= 0) {
         glUniform1f(programInfo.uLerp, lerp);
     }
 
-    bindPostTexture(GShaders::TEX_UNIT_SRC, srcTex, false);
+    // Note: integer textures (the PSX framebuffer with OpenGL ES 3.0) must not be filtered
+    bindPostTexture(GShaders::TEX_UNIT_SRC, srcTex, bLinearFilter);
 
     if (srcTex2) {
-        bindPostTexture(GShaders::TEX_UNIT_SRC2, srcTex2, false);
+        bindPostTexture(GShaders::TEX_UNIT_SRC2, srcTex2, bLinearFilter);
     }
 
-    glBindVertexArray(gEmptyVao);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
-    glBindVertexArray(0);
+    bindQuadVertices();
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    unbindQuadVertices();
     unbindPostTextures();
+}
+
+// Draws over the whole screen with a post program. The source images have their first row at the top (see the header).
+void drawFullscreenPost(const GProgram program, const GLuint srcTex, const GLuint srcTex2, const float lerp) noexcept {
+    static constexpr float POS_RECT[4] = { -1.0f, 1.0f, 1.0f, -1.0f };
+    static constexpr float UV_RECT[4] = { 0.0f, 0.0f, 1.0f, 1.0f };
+    drawPostQuad(program, POS_RECT, UV_RECT, srcTex, srcTex2, lerp, false);
 }
 
 void drawQuad(
@@ -1026,20 +1547,7 @@ void drawQuad(
     const GLuint texture,
     const bool bLinearFilter
 ) noexcept {
-    const GProgramInfo& programInfo = GShaders::get(program);
-    useProgram(programInfo.program);
-    setBlendMode(BlendMode::None);
-    setCullFace(false);
-    glUniform4f(programInfo.uPosRect, posRect[0], posRect[1], posRect[2], posRect[3]);
-    glUniform4f(programInfo.uUvRect, uvRect[0], uvRect[1], uvRect[2], uvRect[3]);
-
-    // Note: integer textures (the PSX framebuffer) must not be filtered
-    bindPostTexture(GShaders::TEX_UNIT_SRC, texture, bLinearFilter);
-
-    glBindVertexArray(gEmptyVao);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    glBindVertexArray(0);
-    unbindPostTextures();
+    drawPostQuad(program, posRect, uvRect, texture, 0, 0.0f, bLinearFilter);
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
@@ -1135,15 +1643,36 @@ static void initGlState() noexcept {
     if (gbPerSampleShading) {
         setSampleShading(false);
     }
+
+    // OpenGL ES 2.0: no vertex attributes enabled to begin with (a new or remade context has none)
+    if (!isGles3()) {
+        for (GLuint attrib = 0; attrib < GShaders::NUM_DRAW_ATTRIBS; ++attrib) {
+            glDisableVertexAttribArray(attrib);
+        }
+
+        gNumEnabledAttribs = 0;
+    }
+}
+
+// Tells if program binaries can be used: OpenGL ES 3.0, or OES_get_program_binary. Either way the driver must have a binary format.
+static bool canUseProgramBinaries() noexcept {
+    const bool bHasApi = (isGles3() || (GLAD_GL_OES_get_program_binary && glProgramBinaryOES && glGetProgramBinaryOES));
+
+    if (!bHasApi)
+        return false;
+
+    // Note: the same enum as GL_NUM_PROGRAM_BINARY_FORMATS_OES
+    GLint numBinaryFormats = 0;
+    glGetIntegerv(GL_NUM_PROGRAM_BINARY_FORMATS, &numBinaryFormats);
+    clearGlErrors();
+    return (numBinaryFormats > 0);
 }
 
 static void initGlResources() noexcept {
     initGlState();
 
-    // Shaders: binaries from the cache where possible ('glProgramBinary' needs at least one binary format)
-    GLint numBinaryFormats = 0;
-    glGetIntegerv(GL_NUM_PROGRAM_BINARY_FORMATS, &numBinaryFormats);
-    const bool bUseProgramBinaries = (numBinaryFormats > 0);
+    // Shaders: binaries from the cache where possible
+    const bool bUseProgramBinaries = canUseProgramBinaries();
 
     const std::string driverId = std::string((const char*) glGetString(GL_VENDOR)) + "|" +
         (const char*) glGetString(GL_RENDERER) + "|" +
@@ -1151,32 +1680,50 @@ static void initGlResources() noexcept {
         (const char*) glGetString(GL_SHADING_LANGUAGE_VERSION);
 
     GShaderCache::init(driverId, bUseProgramBinaries);
-    GShaders::init(!Config::gbUseVulkan32BitShading, bUseProgramBinaries);
 
-    // Samplers for the post programs
-    glGenSamplers(1, &gSamplerNearest);
-    glSamplerParameteri(gSamplerNearest, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glSamplerParameteri(gSamplerNearest, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glSamplerParameteri(gSamplerNearest, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glSamplerParameteri(gSamplerNearest, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    GShaderOptions shaderOptions = {};
+    shaderOptions.api = gApi;
+    shaderOptions.bUse16BitShading = (!Config::gbUseVulkan32BitShading);
+    shaderOptions.bUseProgramBinaries = bUseProgramBinaries;
+    shaderOptions.bHighpFragment = gCaps.bHighpFragment;
+    shaderOptions.bMakeDrawPrograms = true;
+    shaderOptions.vramHiChannel = (gVramFormat.format == GL_LUMINANCE_ALPHA) ? 'a' : 'g';
+    GShaders::init(shaderOptions);
+    invalidateStateCache();
 
-    glGenSamplers(1, &gSamplerLinear);
-    glSamplerParameteri(gSamplerLinear, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glSamplerParameteri(gSamplerLinear, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glSamplerParameteri(gSamplerLinear, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glSamplerParameteri(gSamplerLinear, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    for (uint32_t& serial : gProgramUniformsSerial) {
+        serial = 0;
+    }
+
+    ++gDrawUniformsSerial;  // New programs: none has the draw uniforms
+    gpDrawUniforms = &gZeroDrawUniforms;
+
+    // Samplers for the post programs (OpenGL ES 3.0)
+    if (isGles3()) {
+        glGenSamplers(1, &gSamplerNearest);
+        glSamplerParameteri(gSamplerNearest, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glSamplerParameteri(gSamplerNearest, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glSamplerParameteri(gSamplerNearest, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glSamplerParameteri(gSamplerNearest, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        glGenSamplers(1, &gSamplerLinear);
+        glSamplerParameteri(gSamplerLinear, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glSamplerParameteri(gSamplerLinear, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glSamplerParameteri(gSamplerLinear, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glSamplerParameteri(gSamplerLinear, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    }
 
     // Textures, buffers and framebuffers
     initVram();
     rebuildGammaAdjustTex();
 
     for (GLuint& texture : gPsxFbTex) {
-        texture = createTexture2d(GL_R16UI, Video::ORIG_DRAW_RES_X, Video::ORIG_DRAW_RES_Y);
+        texture = createTexture2d(gVramFormat, Video::ORIG_DRAW_RES_X, Video::ORIG_DRAW_RES_Y);
     }
 
     gPsxFbTexIdx = 0;
     initStreamSlots();
-    glGenVertexArrays(1, &gEmptyVao);
+    initQuadVertices();
 
     // The frame history is made at the start of the next frame (needs the screen size)
     gScreenW = 0;
@@ -1186,12 +1733,8 @@ static void initGlResources() noexcept {
 static void destroyGlResources(const bool bContextLost) noexcept {
     destroyFrameHistory(bContextLost);
     destroyStreamSlots(bContextLost);
-
-    if (gEmptyVao && (!bContextLost)) {
-        glDeleteVertexArrays(1, &gEmptyVao);
-    }
-
-    gEmptyVao = 0;
+    deleteVertexArray(gQuadVao, bContextLost);
+    deleteBuffer(gQuadVbo, bContextLost);
 
     for (GLuint& texture : gPsxFbTex) {
         deleteTexture(texture, bContextLost);
@@ -1215,17 +1758,24 @@ static void destroyGlResources(const bool bContextLost) noexcept {
     GShaders::destroy(bContextLost);
     gUniformUploadBuffer.clear();
     gUniformUploadBuffer.shrink_to_fit();
+    gNumEnabledAttribs = 0;
     gScreenW = 0;
     gScreenH = 0;
     invalidateStateCache();
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
-// Initializes the renderer: the GL context must be current and the GL functions loaded
+// Initializes the renderer for the given API path: the GL context must be current and the GL functions loaded.
+// Returns 'false' if the renderer can't run on this device (OpenGL ES 2.0 without 'highp' floats in fragment shaders).
 //------------------------------------------------------------------------------------------------------------------------------------------
-bool init(SDL_Window* const pWindow) noexcept {
+bool init(SDL_Window* const pWindow, const GApi api) noexcept {
     ASSERT(pWindow);
     ASSERT(!gbInitialized);
+
+    gApi = api;
+
+    if (!determineCaps())
+        return false;
 
     gpWindow = pWindow;
     gbAppInBackground = false;
@@ -1233,7 +1783,6 @@ bool init(SDL_Window* const pWindow) noexcept {
     gbSkipNextFrame = false;
     gbSkipNextFramePresent = false;
 
-    determineCaps();
     fitPsxVramToMaxTextureSize();
     VRenderer::updateCoordSysInfo(0, 0);    // Invalid until the first frame
     VDrawing::initForGles();
@@ -1435,11 +1984,11 @@ void pushPsxVramUpdates(const uint16_t rectLx, const uint16_t rectRx, const uint
 //------------------------------------------------------------------------------------------------------------------------------------------
 void rebuildGammaAdjustTex() noexcept {
     if (!gGammaLutTex) {
-        gGammaLutTex = createTexture2d(GL_R8, 256, 1);
+        gGammaLutTex = createTexture2d(gGammaLutFormat, 256, 1);
     }
 
     bindTextureForUpload(gGammaLutTex);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1, GL_RED, GL_UNSIGNED_BYTE, Video::gGammaTbl.remapTbl8);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1, gGammaLutFormat.format, gGammaLutFormat.type, Video::gGammaTbl.remapTbl8);
 
     // Stays bound to its texture unit for good
     glActiveTexture(GL_TEXTURE0 + GShaders::TEX_UNIT_GAMMA_LUT);
@@ -1449,6 +1998,7 @@ void rebuildGammaAdjustTex() noexcept {
 //------------------------------------------------------------------------------------------------------------------------------------------
 // Info and helpers for the crossfader, the loading plaque drawer and the display of external surfaces
 //------------------------------------------------------------------------------------------------------------------------------------------
+GApi getApi() noexcept { return gApi; }
 uint32_t getScreenWidth() noexcept { return gScreenW; }
 uint32_t getScreenHeight() noexcept { return gScreenH; }
 uint32_t getFrameHistoryIdx() noexcept { return gHistoryIdx; }

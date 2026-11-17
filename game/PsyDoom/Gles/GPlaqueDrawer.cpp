@@ -57,10 +57,8 @@ static GLuint createPlaqueTex(const texture_t& tex, const int16_t clutId) noexce
         }
     }
 
-    GLuint texture = 0;
-    glGenTextures(1, &texture);
+    const GLuint texture = GRenderer::createRgba8Texture(texW, texH);
     GRenderer::bindTextureForUpload(texture);
-    glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, texW, texH);
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, texW, texH, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
     return texture;
 }

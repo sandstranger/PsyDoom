@@ -8,8 +8,14 @@
 #include <cstdint>
 
 //------------------------------------------------------------------------------------------------------------------------------------------
-// The shader programs of the GLES renderer: GLSL ES 3.00 versions of the Vulkan renderer's shaders ('vulkan_shaders'), with what
-// were specialization constants there turned into preprocessor defines (one program per variant).
+// The shader programs of the GLES renderer: versions of the Vulkan renderer's shaders ('vulkan_shaders') for both of its paths:
+//
+//  - OpenGL ES 3.0: GLSL ES 3.00, PSX VRAM as an R16UI texture read with 'texelFetch' and integer operations, as with Vulkan.
+//  - OpenGL ES 2.0: GLSL ES 1.00, which has no integer textures or operations: PSX VRAM is a 2 bytes per texel texture (RG8 or
+//    luminance alpha) and the 16-bit texels and CLUT indexes are decoded with float arithmetic, exact for these small integers.
+//    The draw programs need 'highp' floats in fragment shaders for that (VRAM coordinates go up to 8192).
+//
+// What were specialization constants with Vulkan are preprocessor defines here (one program per variant).
 // Programs come from 'GShaderCache' (RAM, then disk) when possible, otherwise they are compiled and their binaries cached.
 //------------------------------------------------------------------------------------------------------------------------------------------
 enum class GProgram : uint8_t {
@@ -34,27 +40,62 @@ enum class GProgram : uint8_t {
     NUM_PROGRAMS
 };
 
+static constexpr uint32_t NUM_DRAW_PROGRAMS = (uint32_t) GProgram::Sky + 1;     // The draw programs come first
+
+// Which OpenGL ES path the renderer uses
+enum class GApi : uint8_t {
+    Gles2,
+    Gles3
+};
+
 // Uniform locations and such of a program (-1 for what a program doesn't have)
 struct GProgramInfo {
     GLuint  program;
-    GLint   uPosRect;       // Quad programs: the corners of the quad in NDC (left x, top y, right x, bottom y)
-    GLint   uUvRect;        // Quad programs: the texture coordinates of the corners (left u, top v, right u, bottom v)
-    GLint   uLerp;          // Crossfade programs: how far into the crossfade
+    GLint   uPosRect;           // Post programs: the corners of the quad drawn in NDC (left x, top y, right x, bottom y)
+    GLint   uUvRect;            // Post programs: the texture coordinates of the corners (left u, top v, right u, bottom v)
+    GLint   uLerp;              // Crossfade programs: how far into the crossfade
+    GLint   uMvpMatrix;         // OpenGL ES 2.0 draw programs (no uniform blocks): the fields of 'VShaderUniforms_Draw'...
+    GLint   uNdcToPsxScale;
+    GLint   uPsxNdcOffset;
+    GLint   uInvDrawRes;
+    GLint   uVramInvSize;       // OpenGL ES 2.0 draw programs: 1 / the size of PSX VRAM (texture coordinates are normalized)
+};
+
+// Options for making the programs
+struct GShaderOptions {
+    GApi    api;
+    bool    bUse16BitShading;       // Shade with the PSX's 16-bit precision
+    bool    bUseProgramBinaries;    // Use the program binary cache (needs a driver with program binary formats)
+    bool    bHighpFragment;         // OpenGL ES 2.0: 'highp' floats in fragment shaders (needed by the draw programs)
+    bool    bMakeDrawPrograms;      // Make the draw programs (not if the main render path is not supported)
+    char    vramHiChannel;          // OpenGL ES 2.0: the channel with the high byte of the VRAM texels ('g' for RG8, 'a' for luminance alpha)
 };
 
 BEGIN_NAMESPACE(GShaders)
 
-// The binding point of the uniform block of the draw programs ('VShaderUniforms_Draw')
+// The binding point of the uniform block of the draw programs (OpenGL ES 3.0: 'VShaderUniforms_Draw')
 static constexpr GLuint DRAW_UNIFORMS_BINDING = 0;
 
+// Vertex attribute locations: draw programs ('VVertex_Draw') and post programs (quad corners)
+static constexpr GLuint ATTRIB_POS              = 0;
+static constexpr GLuint ATTRIB_COLOR_LIGHTDIM   = 1;
+static constexpr GLuint ATTRIB_UV               = 2;
+static constexpr GLuint ATTRIB_TEXWIN_POS       = 3;
+static constexpr GLuint ATTRIB_TEXWIN_SIZE      = 4;
+static constexpr GLuint ATTRIB_CLUT_POS         = 5;
+static constexpr GLuint ATTRIB_STMUL            = 6;
+static constexpr GLuint NUM_DRAW_ATTRIBS        = 7;
+static constexpr GLuint ATTRIB_CORNER           = 0;
+
 // Texture units used by the programs
-static constexpr GLuint TEX_UNIT_VRAM       = 0;    // Draw programs: PSX VRAM (R16UI)
+static constexpr GLuint TEX_UNIT_VRAM       = 0;    // Draw programs: PSX VRAM
 static constexpr GLuint TEX_UNIT_SRC        = 1;    // Post programs: the image drawn (crossfade: the image faded from)
 static constexpr GLuint TEX_UNIT_SRC2       = 2;    // Crossfade: the image faded to
 static constexpr GLuint TEX_UNIT_GAMMA_LUT  = 3;    // Post programs: the 256x1 gamma remap table
 
-void init(const bool bUse16BitShading, const bool bUseProgramBinaries) noexcept;
+void init(const GShaderOptions& options) noexcept;
 void destroy(const bool bContextLost) noexcept;
+void setVramSize(const uint32_t vramW, const uint32_t vramH) noexcept;
 const GProgramInfo& get(const GProgram program) noexcept;
 
 END_NAMESPACE(GShaders)

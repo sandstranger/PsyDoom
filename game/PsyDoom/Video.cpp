@@ -33,11 +33,13 @@ static VideoBackend_SDL gVideoBackend_SDL;
 #endif
 
 #if PSYDOOM_GLES_RENDERER
-    // OpenGL ES 3.0 video backend that can do the classic renderer plus the GLES version of the new renderer
+    // OpenGL ES 3.0/2.0 video backend that can do the classic renderer plus the GLES version of the new renderer
     static VideoBackend_GLES gVideoBackend_GLES;
 
-    // Use the OpenGL ES 3.0 backend even if Vulkan is available? (Android: set by the launcher through JNA)
+    // Use the OpenGL ES backend even if Vulkan is available? (Android: set by the launcher through JNA).
+    // The OpenGL ES 2.0 option also makes the renderer use its OpenGL ES 2.0 path even if OpenGL ES 3.0 is available.
     static bool gbUseGles3Renderer = false;
+    static bool gbUseGles2Renderer = false;
 #endif
 
 // Pointer to the video backend implementation in use
@@ -48,6 +50,11 @@ extern "C" {
 __attribute__((used)) __attribute__((visibility("default")))
 void setUseGLES3Renderer(const bool useGLES3Renderer) {
     gbUseGles3Renderer = useGLES3Renderer;
+}
+
+__attribute__((used)) __attribute__((visibility("default")))
+void setUseGLES2Renderer(const bool useGLES2Renderer) {
+    gbUseGles2Renderer = useGLES2Renderer;
 }
 }
 #endif
@@ -133,9 +140,11 @@ static void decideStartupResolution(const uint8_t displayIndex, int32_t& w, int3
 // Utility: determines which video backend to use (requires a window to do so)
 //------------------------------------------------------------------------------------------------------------------------------------------
 static void determineVideoBackend() noexcept {
-    // The OpenGL ES 3.0 backend if asked for
+    // The OpenGL ES backend if asked for (its OpenGL ES 2.0 path if asked for)
     #if PSYDOOM_GLES_RENDERER
-        if (gbUseGles3Renderer) {
+        gVideoBackend_GLES.setForceGles2(gbUseGles2Renderer);
+
+        if (gbUseGles3Renderer || gbUseGles2Renderer) {
             gpVideoBackend = &gVideoBackend_GLES;
             gBackendType = BackendType::GLES;
             return;
@@ -150,8 +159,8 @@ static void determineVideoBackend() noexcept {
         }
     #endif
 
-    // No Vulkan (or disabled): the OpenGL ES 3.0 backend, which has the same new renderer.
-    // If OpenGL ES 3.0 turns out not to be available either, the SDL backend is used instead (see 'initVideo').
+    // No Vulkan (or disabled): the OpenGL ES backend (3.0, else 2.0), which has the same new renderer.
+    // If that turns out not to be possible either, the SDL backend is used instead (see 'initVideo').
     #if PSYDOOM_GLES_RENDERER
         gpVideoBackend = &gVideoBackend_GLES;
         gBackendType = BackendType::GLES;
@@ -306,7 +315,7 @@ void initVideo() noexcept {
     #endif
     
     // Initialize the video backend.
-    // The OpenGL ES 3.0 backend can only tell if OpenGL ES 3.0 is available once it has a window: if not, use the SDL backend instead.
+    // The OpenGL ES backend can only tell if OpenGL ES 3.0 or 2.0 can be used once it has a window: if not, use the SDL backend instead.
     // Both use an OpenGL window. The SDL renderer wants an OpenGL ES 2.0 context (any later version is compatible with it).
     #if PSYDOOM_GLES_RENDERER
         if (gBackendType == BackendType::GLES) {
@@ -489,7 +498,7 @@ bool isUsingVulkanVideoBackend() noexcept {
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
-// Tells if the OpenGL ES 3.0 video backend is being used
+// Tells if the OpenGL ES video backend is being used
 //------------------------------------------------------------------------------------------------------------------------------------------
 bool isUsingGlesVideoBackend() noexcept {
     #if PSYDOOM_GLES_RENDERER
@@ -500,14 +509,14 @@ bool isUsingGlesVideoBackend() noexcept {
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
-// Tells if a video backend which has the new renderer is being used: Vulkan, or its OpenGL ES 3.0 version
+// Tells if a video backend which has the new renderer is being used: Vulkan, or its OpenGL ES version
 //------------------------------------------------------------------------------------------------------------------------------------------
 bool isUsingNewRendererBackend() noexcept {
     return (isUsingVulkanVideoBackend() || isUsingGlesVideoBackend());
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
-// Helper: tells if any of the render paths used by the new Vulkan renderer (or its OpenGL ES 3.0 version) are currently in use.
+// Helper: tells if any of the render paths used by the new Vulkan renderer (or its OpenGL ES version) are currently in use.
 // Note: will return 'false' if we are using a Vulkan or GLES backend but just outputting the classic PSX renderer.
 //------------------------------------------------------------------------------------------------------------------------------------------
 bool isUsingVulkanRenderPath() noexcept {

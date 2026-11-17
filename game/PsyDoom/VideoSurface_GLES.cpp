@@ -21,9 +21,7 @@ VideoSurface_GLES::VideoSurface_GLES(const uint32_t width, const uint32_t height
 {
     ASSERT((width > 0) && (height > 0));
 
-    glGenTextures(1, &mTexture);
-    GRenderer::bindTextureForUpload(mTexture);
-    glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, (GLsizei) width, (GLsizei) height);
+    mTexture = GRenderer::createRgba8Texture(width, height);
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------

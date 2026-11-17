@@ -28,7 +28,7 @@ static constexpr int32_t ORIG_DISP_RES_Y = 240;
 enum BackendType {
     SDL,        // Using an SDL backend which only supports the classic renderer
     Vulkan,     // Using a Vulkan backend which supports both the classic renderer and the new Vulkan renderer
-    GLES        // Using an OpenGL ES 3.0 backend which supports both the classic renderer and the new renderer (its GLES version)
+    GLES        // Using an OpenGL ES 3.0/2.0 backend which supports both the classic renderer and the new renderer (its GLES version)
 };
 
 extern BackendType  gBackendType;

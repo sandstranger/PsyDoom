@@ -10,7 +10,7 @@ typedef void* SDL_GLContext;
 BEGIN_NAMESPACE(Video)
 
 //------------------------------------------------------------------------------------------------------------------------------------------
-// A video backend that uses OpenGL ES 3.0 to display the current framebuffer to the screen.
+// A video backend that uses OpenGL ES 3.0 (or 2.0, if that is all there is or if asked for) to display the current framebuffer to the screen.
 // Supports both the classic PlayStation renderer and the new hardware accelerated renderer (the GLES version of the Vulkan renderer).
 //------------------------------------------------------------------------------------------------------------------------------------------
 class VideoBackend_GLES : public IVideoBackend {
@@ -39,12 +39,17 @@ public:
     virtual void getScreenSizeInPixels(uint32_t& width, uint32_t& height) noexcept override;
     [[nodiscard]] virtual std::unique_ptr<IVideoSurface> createSurface(const uint32_t width, const uint32_t height) noexcept override;
 
+    void setForceGles2(const bool bForceGles2) noexcept;
     bool tryInitRenderers(SDL_Window* const pSdlWindow) noexcept;
     void onContextLost() noexcept;
 
 private:
     SDL_Window*             mpSdlWindow;                    // The SDL window used
-    SDL_GLContext           mGlContext;                     // The OpenGL ES 3.0 context
+    bool createGlContext(const int majorVersion) noexcept;
+    void destroyGlContext() noexcept;
+
+    SDL_GLContext           mGlContext;                     // The OpenGL ES context
+    bool                    mbForceGles2;                   // Use the OpenGL ES 2.0 path even if OpenGL ES 3.0 is available
     GRenderer::RenderPath   mDispExtSurfOldRenderPath;      // The render path used prior to displaying external surfaces (restored after)
 };
 
