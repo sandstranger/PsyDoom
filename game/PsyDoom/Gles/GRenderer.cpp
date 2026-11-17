@@ -28,6 +28,10 @@
 #include <string>
 #include <vector>
 
+#if PSYDOOM_ANDROID_GRAPHICS_LAYER
+    #include "SwappyController.h"
+#endif
+
 BEGIN_NAMESPACE(GRenderer)
 
 //------------------------------------------------------------------------------------------------------------------------------------------
@@ -1978,6 +1982,20 @@ bool isRendering() noexcept {
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
+// Shows the finished frame (window surface) on the screen.
+// Android: through Swappy if the app enabled frame pacing - it does the swap itself, timed to the display's refresh (and gives up if a
+// graphics debugger is attached). Otherwise a plain swap.
+//------------------------------------------------------------------------------------------------------------------------------------------
+static void presentFrame() noexcept {
+    #if PSYDOOM_ANDROID_GRAPHICS_LAYER
+        if (SwappySwapBuffers())
+            return;
+    #endif
+
+    SDL_GL_SwapWindow(gpWindow);
+}
+
+//------------------------------------------------------------------------------------------------------------------------------------------
 // Ends the frame and shows it on the screen (unless skipped)
 //------------------------------------------------------------------------------------------------------------------------------------------
 void endFrame() noexcept {
@@ -1994,7 +2012,7 @@ void endFrame() noexcept {
     }
 
     if (!bSkipPresent) {
-        SDL_GL_SwapWindow(gpWindow);
+        presentFrame();
     }
 
     gbSkipNextFrame = false;

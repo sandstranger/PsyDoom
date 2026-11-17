@@ -47,6 +47,7 @@ private:
     SDL_Window*             mpSdlWindow;                    // The SDL window used
     bool createGlContext(const int majorVersion) noexcept;
     void destroyGlContext() noexcept;
+    bool installAngleBlobCache() noexcept;
 
     SDL_GLContext           mGlContext;                     // The OpenGL ES context
     bool                    mbForceGles2;                   // Use the OpenGL ES 2.0 path even if OpenGL ES 3.0 is available

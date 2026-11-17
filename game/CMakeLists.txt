@@ -628,6 +628,17 @@ if (PSYDOOM_INCLUDE_GLES_RENDERER)
     target_link_libraries(${GAME_TGT_NAME} PRIVATE ${GLAD_TGT_NAME})
 endif()
 
+# Android, OpenGL ES renderer: frame pacing (Swappy) and the ANGLE shader/pipeline blob cache from the app's 'AndroidGraphicsLayer'
+# library, if PsyDoom is built as part of the app (the library's target is made before PsyDoom's).
+if (ANDROID AND PSYDOOM_INCLUDE_GLES_RENDERER AND TARGET AndroidGraphicsLayer)
+    get_target_property(ANDROID_GRAPHICS_LAYER_DIR AndroidGraphicsLayer SOURCE_DIR)
+    target_include_directories(${GAME_TGT_NAME} PRIVATE "${ANDROID_GRAPHICS_LAYER_DIR}/include")
+    target_link_libraries(${GAME_TGT_NAME} PRIVATE AndroidGraphicsLayer)
+    target_bool_compile_definition(${GAME_TGT_NAME} PRIVATE PSYDOOM_ANDROID_GRAPHICS_LAYER ON)
+else()
+    target_bool_compile_definition(${GAME_TGT_NAME} PRIVATE PSYDOOM_ANDROID_GRAPHICS_LAYER OFF)
+endif()
+
 # MSVC specific stuff
 if (COMPILER_MSVC)
     # Need this flag to prevent the linker hitting object file limits on some modules

@@ -10,6 +10,11 @@
 #include <algorithm>
 #include <SDL.h>
 
+#if PSYDOOM_ANDROID_GRAPHICS_LAYER
+    #include "AngleShaderCache.h"
+    #include "SwappyController.h"
+#endif
+
 BEGIN_NAMESPACE(Video)
 
 //------------------------------------------------------------------------------------------------------------------------------------------
@@ -84,6 +89,7 @@ bool VideoBackend_GLES::createGlContext(const int majorVersion) noexcept {
 
     const bool bContextOk = (
         (SDL_GL_MakeCurrent(mpSdlWindow, mGlContext) == 0) &&
+        installAngleBlobCache() &&
         gladLoadGLES2Loader((GLADloadproc) SDL_GL_GetProcAddress) &&
         (GLVersion.major >= majorVersion)
     );
@@ -93,6 +99,19 @@ bool VideoBackend_GLES::createGlContext(const int majorVersion) noexcept {
         destroyGlContext();
         return false;
     }
+
+    return true;
+}
+
+//------------------------------------------------------------------------------------------------------------------------------------------
+// Android: if the app runs the game on ANGLE, gives ANGLE a persistent cache (the app's cache folder) for its compiled shaders and its
+// Vulkan pipeline cache, so that they are not made again on every start. Must be done while the context is current, before any shader
+// is compiled. Does nothing if ANGLE is not used (the system driver has its own cache) or once already done. Always returns 'true'.
+//------------------------------------------------------------------------------------------------------------------------------------------
+bool VideoBackend_GLES::installAngleBlobCache() noexcept {
+    #if PSYDOOM_ANDROID_GRAPHICS_LAYER
+        angle_blobcache_install("psydoom");
+    #endif
 
     return true;
 }
@@ -157,6 +176,11 @@ void VideoBackend_GLES::destroyRenderers() noexcept {
     GRenderer::destroy();
     destroyGlContext();
     mpSdlWindow = nullptr;
+
+    // Android: stop Swappy's frame pacing threads (it can't be used again afterwards, this is only done when the game quits)
+    #if PSYDOOM_ANDROID_GRAPHICS_LAYER
+        DestroySwappy();
+    #endif
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
