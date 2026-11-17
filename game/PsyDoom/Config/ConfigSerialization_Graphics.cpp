@@ -234,6 +234,16 @@ void initCfgSerialization_Graphics() noexcept {
         3
     );
 
+    cfg.glesInstancing = makeConfigField(
+        "GlesInstancing",
+        "Builds with the OpenGL ES renderer (Android), OpenGL ES 3.0 only: if enabled then the new renderer\n"
+        "draws each wall, flat and sprite as one GPU instance instead of the vertices of its triangles:\n"
+        "about half the data uploaded per frame and fewer vertex shader runs, with the same image.\n"
+        "Disabled by default: everything is drawn as vertices, like with OpenGL ES 2.0.",
+        gbGlesInstancing,
+        false
+    );
+
     cfg.logicalDisplayWidth = makeConfigField(
         "LogicalDisplayWidth",
         "Determines the game's horizontal stretch factor and affects both the Classic and Vulkan renderers.\n"

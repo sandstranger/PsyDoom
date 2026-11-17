@@ -64,6 +64,7 @@ extern float            gLogicalDisplayW;
 extern bool             gbDisableVulkanRenderer;
 extern bool             gbUseGlesRenderer;
 extern int32_t          gGlesRendererVersion;
+extern bool             gbGlesInstancing;
 extern int32_t          gVulkanRenderHeight;
 extern bool             gbVulkanPixelStretch;
 extern bool             gbVulkanTripleBuffer;

@@ -170,7 +170,6 @@ static TexFormat    gVramFormat;            // Format of PSX VRAM, the staging t
 static TexFormat    gGammaLutFormat;        // Format of the gamma remap table: 8 bits per texel
 static TexFormat    gRgba8Format;           // RGBA8 textures (loading plaques, movies and logos)
 static bool         gbStagedVramUpdates;    // Whether PSX VRAM updates are copied in by the GPU
-static bool         gbInstancingAllowed = true;     // Whether instancing may be used (Android: set by the launcher through JNA)
 static bool         gbInstancing;           // OpenGL ES 3.0: each primitive of the main render path is drawn as an instance ('VInstance_Draw')
 static bool         gbBaseInstance;         // Instancing: draws start at their first instance with EXT_base_instance (else attributes move)
 
@@ -786,11 +785,11 @@ static bool determineCaps() noexcept {
         (glMinSampleShadingOES != nullptr)
     );
 
-    // Instancing: core in OpenGL ES 3.0 (the OpenGL ES 2.0 path draws vertices).
+    // Instancing: core in OpenGL ES 3.0 (the OpenGL ES 2.0 path draws vertices), used only if the config asks for it (off by default).
     // Draws start at their first instance with EXT_base_instance, otherwise the instance attributes are moved to it for each draw.
     gbInstancing = (
         isGles3() &&
-        gbInstancingAllowed &&
+        Config::gbGlesInstancing &&
         (glDrawArraysInstanced != nullptr) &&
         (glVertexAttribDivisor != nullptr)
     );
@@ -2108,25 +2107,6 @@ bool didRenderToAllFrameHistory() noexcept {
     return true;
 }
 
-//------------------------------------------------------------------------------------------------------------------------------------------
-// Whether the OpenGL ES 3.0 path may draw with instancing (the default). Takes effect the next time the renderer is made.
-//------------------------------------------------------------------------------------------------------------------------------------------
-void setInstancingAllowed(const bool bAllowed) noexcept {
-    gbInstancingAllowed = bAllowed;
-}
-
 END_NAMESPACE(GRenderer)
-
-//------------------------------------------------------------------------------------------------------------------------------------------
-// Android: the launcher can turn instancing off for the OpenGL ES 3.0 path through JNA (on by default)
-//------------------------------------------------------------------------------------------------------------------------------------------
-#if ANDROID
-extern "C" {
-__attribute__((used)) __attribute__((visibility("default")))
-void setUseGLES3Instancing(const bool useInstancing) {
-    GRenderer::setInstancingAllowed(useInstancing);
-}
-}
-#endif
 
 #endif  // #if PSYDOOM_GLES_RENDERER

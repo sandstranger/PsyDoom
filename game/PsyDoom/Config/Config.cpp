@@ -77,6 +77,7 @@ float           gLogicalDisplayW;
 bool            gbDisableVulkanRenderer;
 bool            gbUseGlesRenderer;
 int32_t         gGlesRendererVersion;
+bool            gbGlesInstancing;
 int32_t         gVulkanRenderHeight;
 bool            gbVulkanPixelStretch;
 bool            gbVulkanTripleBuffer;

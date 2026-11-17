@@ -28,6 +28,7 @@ struct Config_Graphics {
     ConfigField     disableVulkanRenderer;
     ConfigField     useGlesRenderer;
     ConfigField     glesRendererVersion;
+    ConfigField     glesInstancing;
     ConfigField     logicalDisplayWidth;
     ConfigField     topOverscanPixels;
     ConfigField     bottomOverscanPixels;

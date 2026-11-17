@@ -32,7 +32,8 @@ struct SDL_Window;
 //    render pass itself then, so it is just as cheap; ANGLE also has EXT_multisampled_render_to_texture, which comes first.
 //  - Each frame is a fixed sequence of passes, each to one framebuffer and done once: (1) PSX VRAM updates, (2) the frame, (3) the frame
 //    shown on the screen with gamma adjustment. No framebuffer switches in between, no reads back to the CPU, no glFinish.
-//  - OpenGL ES 3.0 draws the main render path with instancing: one instance per primitive ('VInstance_Draw', recorded by 'VDrawing'),
+//  - OpenGL ES 3.0 can draw the main render path with instancing (graphics config 'GlesInstancing', off by default): one instance
+//    per primitive ('VInstance_Draw', recorded by 'VDrawing'),
 //    a quad as a 4 vertex strip with its corners picked by 'gl_VertexID'. A quad is then 112 bytes instead of 6 vertices of 40 bytes,
 //    with 4 vertex shader runs instead of 6, and still the same triangles in the same order (no depth buffer: the order matters).
 //    The draws start at their first instance with EXT_base_instance, otherwise the instance attributes are moved to it.
@@ -90,7 +91,6 @@ GLuint getFrameHistoryTex(const uint32_t idx) noexcept;
 bool didRenderToAllFrameHistory() noexcept;
 void bindTextureForUpload(const GLuint texture) noexcept;
 GLuint createRgba8Texture(const uint32_t width, const uint32_t height) noexcept;
-void setInstancingAllowed(const bool bAllowed) noexcept;
 
 void drawFullscreenPost(const GProgram program, const GLuint srcTex, const GLuint srcTex2, const float lerp) noexcept;
 
