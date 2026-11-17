@@ -75,6 +75,8 @@ int32_t         gOutputDisplayIndex;
 bool            gbExclusiveFullscreenMode;
 float           gLogicalDisplayW;
 bool            gbDisableVulkanRenderer;
+bool            gbUseGlesRenderer;
+int32_t         gGlesRendererVersion;
 int32_t         gVulkanRenderHeight;
 bool            gbVulkanPixelStretch;
 bool            gbVulkanTripleBuffer;

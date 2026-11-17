@@ -78,7 +78,7 @@ endif()
 
 set(PSYDOOM_INCLUDE_GLES_RENDERER ${PSYDOOM_INCLUDE_GLES_RENDERER_DEFAULT} CACHE BOOL
 "If TRUE then compile in support for the OpenGL ES 3.0/2.0 renderer (on by default on Android).
-It is used where Vulkan is unavailable or when chosen (see 'setUseGLES3Renderer', 'setUseGLES2Renderer'). Requires the Vulkan renderer to be compiled in too.")
+It is used by default (graphics config 'UseGlesRenderer', 'GlesRendererVersion') and where Vulkan is unavailable. Requires the Vulkan renderer to be compiled in too.")
 
 if (PSYDOOM_INCLUDE_GLES_RENDERER AND (NOT PSYDOOM_INCLUDE_VULKAN_RENDERER))
     message(FATAL_ERROR "PSYDOOM_INCLUDE_GLES_RENDERER requires PSYDOOM_INCLUDE_VULKAN_RENDERER (the renderer frontend is shared).")

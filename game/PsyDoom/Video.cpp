@@ -35,29 +35,10 @@ static VideoBackend_SDL gVideoBackend_SDL;
 #if PSYDOOM_GLES_RENDERER
     // OpenGL ES 3.0/2.0 video backend that can do the classic renderer plus the GLES version of the new renderer
     static VideoBackend_GLES gVideoBackend_GLES;
-
-    // Use the OpenGL ES backend even if Vulkan is available? (Android: set by the launcher through JNA).
-    // The OpenGL ES 2.0 option also makes the renderer use its OpenGL ES 2.0 path even if OpenGL ES 3.0 is available.
-    static bool gbUseGles3Renderer = false;
-    static bool gbUseGles2Renderer = false;
 #endif
 
 // Pointer to the video backend implementation in use
 static IVideoBackend* gpVideoBackend;
-
-#if ANDROID && PSYDOOM_GLES_RENDERER
-extern "C" {
-__attribute__((used)) __attribute__((visibility("default")))
-void setUseGLES3Renderer(const bool useGLES3Renderer) {
-    gbUseGles3Renderer = useGLES3Renderer;
-}
-
-__attribute__((used)) __attribute__((visibility("default")))
-void setUseGLES2Renderer(const bool useGLES2Renderer) {
-    gbUseGles2Renderer = useGLES2Renderer;
-}
-}
-#endif
 
 SDL_Window*     gpSdlWindow;    // The SDL window being used
 BackendType     gBackendType;   // Which type of video backend is in use
@@ -140,11 +121,11 @@ static void decideStartupResolution(const uint8_t displayIndex, int32_t& w, int3
 // Utility: determines which video backend to use (requires a window to do so)
 //------------------------------------------------------------------------------------------------------------------------------------------
 static void determineVideoBackend() noexcept {
-    // The OpenGL ES backend if asked for (its OpenGL ES 2.0 path if asked for)
+    // The OpenGL ES backend if the config asks for it (the default), its OpenGL ES 2.0 path only if the config asks for that
     #if PSYDOOM_GLES_RENDERER
-        gVideoBackend_GLES.setForceGles2(gbUseGles2Renderer);
+        gVideoBackend_GLES.setForceGles2(Config::gGlesRendererVersion == 2);
 
-        if (gbUseGles3Renderer || gbUseGles2Renderer) {
+        if (Config::gbUseGlesRenderer) {
             gpVideoBackend = &gVideoBackend_GLES;
             gBackendType = BackendType::GLES;
             return;

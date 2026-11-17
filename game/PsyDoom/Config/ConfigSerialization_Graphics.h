@@ -26,6 +26,8 @@ struct Config_Graphics {
     ConfigField     vulkanWidescreenEnabled;
     ConfigField     useVulkan32BitShading;
     ConfigField     disableVulkanRenderer;
+    ConfigField     useGlesRenderer;
+    ConfigField     glesRendererVersion;
     ConfigField     logicalDisplayWidth;
     ConfigField     topOverscanPixels;
     ConfigField     bottomOverscanPixels;

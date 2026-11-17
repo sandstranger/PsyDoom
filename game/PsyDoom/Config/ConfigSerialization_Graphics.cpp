@@ -91,7 +91,7 @@ void initCfgSerialization_Graphics() noexcept {
     
     cfg.antiAliasingMultisamples = makeConfigField(
         "AntiAliasingMultisamples",
-        "Vulkan renderer only: the number of multisamples to use for anti-aliasing the view.\n"
+        "Vulkan and OpenGL ES renderers: the number of multisamples to use for anti-aliasing the view.\n"
         "Increasing the number of samples can help smooth edges and prevent texture shimmer, but can be\n"
         "costly to do at high resolutions or on weaker GPUs. 4x is probably reasonable for most GPUs and\n"
         "screen resolution combinations, given the low requirements of Doom.\n"
@@ -104,7 +104,7 @@ void initCfgSerialization_Graphics() noexcept {
 
     cfg.antiAliasingEdgesOnly = makeConfigField(
         "AntiAliasingEdgesOnly",
-        "Vulkan renderer only: if enabled then multisample anti-aliasing smooths only the edges of\n"
+        "Vulkan and OpenGL ES renderers: if enabled then multisample anti-aliasing smooths only the edges of\n"
         "geometry. By default (disabled) the shading of every sample is computed separately, which also\n"
         "smooths texture shimmer but multiplies the shading work by the number of samples: with 4x MSAA\n"
         "four times as much. Enabling this can greatly improve performance on mobile GPUs.",
@@ -211,6 +211,27 @@ void initCfgSerialization_Graphics() noexcept {
         "between renderers.",
         gbDisableVulkanRenderer,
         false
+    );
+
+    cfg.useGlesRenderer = makeConfigField(
+        "UseGlesRenderer",
+        "Builds with the OpenGL ES renderer (Android): if enabled then the new hardware renderer is drawn\n"
+        "with OpenGL ES instead of Vulkan, even if Vulkan is available. The OpenGL ES renderer is made for\n"
+        "the tile based GPUs of phones (Mali, Adreno, PowerVR) and also works on ANGLE. If disabled then\n"
+        "Vulkan is used if possible and OpenGL ES only if Vulkan is not available (or is disabled).\n"
+        "If the OpenGL ES renderer can't be used either then only the Classic renderer is available.",
+        gbUseGlesRenderer,
+        true
+    );
+
+    cfg.glesRendererVersion = makeConfigField(
+        "GlesRendererVersion",
+        "Builds with the OpenGL ES renderer (Android): which OpenGL ES version the renderer uses, 3 or 2.\n"
+        "3: OpenGL ES 3.0 (the default), with OpenGL ES 2.0 as a fallback if 3.0 is not available.\n"
+        "2: OpenGL ES 2.0 only, even if 3.0 is available: for old or buggy drivers. Slower and with fewer\n"
+        "features: no GPU instancing and no per-sample shading (anti-aliasing smooths only edges).",
+        gGlesRendererVersion,
+        3
     );
 
     cfg.logicalDisplayWidth = makeConfigField(
