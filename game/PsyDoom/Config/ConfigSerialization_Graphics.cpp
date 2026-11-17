@@ -241,7 +241,7 @@ void initCfgSerialization_Graphics() noexcept {
         "about half the data uploaded per frame and fewer vertex shader runs, with the same image.\n"
         "Disabled by default: everything is drawn as vertices, like with OpenGL ES 2.0.",
         gbGlesInstancing,
-        false
+        true
     );
 
     cfg.logicalDisplayWidth = makeConfigField(
