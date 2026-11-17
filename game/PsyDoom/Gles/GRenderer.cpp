@@ -349,7 +349,7 @@ static void waitForAndDeleteFence(GLsync& fence) noexcept {
         return;
 
     while (true) {
-        const GLenum result = glClientWaitSync(fence, GL_SYNC_FLUSH_COMMANDS_BIT, FENCE_WAIT_TIMEOUT);
+        const GLenum result = glClientWaitSync(fence, 0, FENCE_WAIT_TIMEOUT);
 
         if (result != GL_TIMEOUT_EXPIRED)
             break;  // Signalled, or failed (context lost): either way done
