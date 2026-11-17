@@ -62,6 +62,58 @@ void toGlClipSpaceDepth() {
 }
 )";
 
+// Vertex inputs of the draw shaders with instancing: one instance per primitive ('VInstance_Draw'). The corner is picked by 'gl_VertexID'
+// (triangle strip order) and turned into the same inputs as without instancing, before the shader's own 'main' (renamed) runs.
+static constexpr const char* const SRC3_DRAW_VS_INPUTS_INSTANCED = R"(
+layout(location = 0) in vec4    inst_x;
+layout(location = 1) in vec4    inst_y;
+layout(location = 2) in vec4    inst_z;
+layout(location = 3) in vec4    inst_u;
+layout(location = 4) in vec4    inst_v;
+layout(location = 5) in uvec4   inst_colors;        // Per corner: r | g << 8 | b << 16 | light diminishing flags << 24
+layout(location = 6) in uvec4   inst_texWin;        // Position, size
+layout(location = 7) in uvec2   inst_clut_stmul;    // clut x | clut y << 16, semi-transparency multiply r | g << 8 | b << 16 | a << 24
+
+vec3    in_pos;
+uvec4   in_color_lightDimFlags;
+vec2    in_uv;
+uvec2   in_texWinPos;
+uvec2   in_texWinSize;
+uvec2   in_clutPos;
+uvec4   in_stmul;
+
+uvec4 unpackBytes(uint value) {
+    return uvec4(value & 0xFFu, (value >> 8u) & 0xFFu, (value >> 16u) & 0xFFu, value >> 24u);
+}
+
+void loadInstanceCorner() {
+    int corner = gl_VertexID;
+    in_pos = vec3(inst_x[corner], inst_y[corner], inst_z[corner]);
+    in_uv = vec2(inst_u[corner], inst_v[corner]);
+    in_color_lightDimFlags = unpackBytes(inst_colors[corner]);
+    in_texWinPos = inst_texWin.xy;
+    in_texWinSize = inst_texWin.zw;
+    in_clutPos = uvec2(inst_clut_stmul.x & 0xFFFFu, inst_clut_stmul.x >> 16u);
+    in_stmul = unpackBytes(inst_clut_stmul.y);
+}
+
+// Vulkan clip space depth is 0 to w, OpenGL's is -w to w: remap so that geometry is clipped by the near and far planes as with Vulkan
+void toGlClipSpaceDepth() {
+    gl_Position.z = gl_Position.z * 2.0 - gl_Position.w;
+}
+
+#define main drawMain
+)";
+
+static constexpr const char* const SRC3_DRAW_VS_INSTANCED_MAIN = R"(
+#undef main
+
+void main() {
+    loadInstanceCorner();
+    drawMain();
+}
+)";
+
 // Common fragment shader functions ('ShaderCommon_Frag.h'): reading texels from PSX VRAM
 static constexpr const char* const SRC3_DRAW_FS_COMMON = R"(
 uniform highp usampler2D vramTex;   // A texture containing the entirety of PSX VRAM
@@ -897,7 +949,11 @@ static std::string makeShaderSource(const ProgramDef& def, const bool bVertexSha
         src += (bGles3) ? SRC3_DRAW_UNIFORMS : SRC2_DRAW_UNIFORMS;
 
         if (bVertexShader) {
-            src += (bGles3) ? SRC3_DRAW_VS_INPUTS : SRC2_DRAW_VS_INPUTS;
+            if (bGles3) {
+                src += (options.bInstancing) ? SRC3_DRAW_VS_INPUTS_INSTANCED : SRC3_DRAW_VS_INPUTS;
+            } else {
+                src += SRC2_DRAW_VS_INPUTS;
+            }
         } else if (!bColoredFs) {
             src += (bGles3) ? SRC3_DRAW_FS_COMMON : SRC2_DRAW_FS_COMMON;
         }
@@ -907,6 +963,10 @@ static std::string makeShaderSource(const ProgramDef& def, const bool bVertexSha
 
     if (bVertexShader) {
         src += (bGles3) ? def.vs3 : def.vs2;
+
+        if (bGles3 && options.bInstancing && (def.kind == ProgramKind::Draw)) {
+            src += SRC3_DRAW_VS_INSTANCED_MAIN;
+        }
     } else {
         src += fsBody;
     }
@@ -1145,9 +1205,10 @@ void init(const GShaderOptions& options) noexcept {
     }
 
     SDL_Log(
-        "PsyDoom GLES: %u shader programs (%s), %u from the shader cache",
+        "PsyDoom GLES: %u shader programs (%s%s), %u from the shader cache",
         numPrograms,
         (gApi == GApi::Gles3) ? "GLSL ES 3.00" : "GLSL ES 1.00",
+        (options.bInstancing) ? ", instancing" : "",
         numFromCache
     );
 }

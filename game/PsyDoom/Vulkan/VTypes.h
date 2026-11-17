@@ -125,6 +125,31 @@ struct VVertex_Draw {
     uint8_t stmulR, stmulG, stmulB, stmulA;
 };
 
+#if PSYDOOM_GLES_RENDERER
+//------------------------------------------------------------------------------------------------------------------------------------------
+// GLES renderer, OpenGL ES 3.0 with instancing: one primitive (quad, triangle or line) drawn as one instance, instead of as the vertices
+// of its triangles ('VVertex_Draw'). The vertex shader picks the corner by 'gl_VertexID'.
+//
+// The corners are in triangle strip order: a quad is drawn as a 4 vertex strip, giving exactly the same 2 triangles (and winding) as the
+// 6 vertices of 'VVertex_Draw'. A triangle repeats its last corner (the second triangle of the strip has no area), a line uses the
+// first 2 corners. What is the same for all the vertices of a primitive with 'VVertex_Draw' is stored once.
+//------------------------------------------------------------------------------------------------------------------------------------------
+struct VInstance_Draw {
+    float       x[4];               // Corner positions
+    float       y[4];
+    float       z[4];
+    float       u[4];               // Corner texture coordinates
+    float       v[4];
+    uint8_t     color[4][4];        // Per corner: r, g, b, light diminishing mode flags (as in 'VVertex_Draw')
+    uint16_t    texWinX, texWinY;   // Texture window and CLUT, as in 'VVertex_Draw'
+    uint16_t    texWinW, texWinH;
+    uint16_t    clutX, clutY;
+    uint8_t     stmulR, stmulG, stmulB, stmulA;
+};
+
+static_assert(sizeof(VInstance_Draw) == 112);
+#endif
+
 //------------------------------------------------------------------------------------------------------------------------------------------
 // Vulkan renderer vertex type: used for MSAA resolve and just contains a 2D position in normalized device coords
 //------------------------------------------------------------------------------------------------------------------------------------------

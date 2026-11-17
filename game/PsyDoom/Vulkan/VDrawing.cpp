@@ -54,11 +54,12 @@ static std::vector<DrawCmd> gFrameDrawCmds;
 
 #if PSYDOOM_GLES_RENDERER
     //--------------------------------------------------------------------------------------------------------------------------------------
-    // GLES renderer: vertices for the 'draw' subpass go into CPU memory (uploaded once at the end of the frame).
+    // GLES renderer: vertices (or instances) for the 'draw' subpass go into CPU memory (uploaded once at the end of the frame).
     // Has the same batch tracking as 'VVertexBufferSet'.
     //--------------------------------------------------------------------------------------------------------------------------------------
-    struct CpuVertexBuffer {
-        std::unique_ptr<VVertex_Draw[]>     pVerts;
+    template <class T>
+    struct CpuElementBuffer {
+        std::unique_ptr<T[]>                pVerts;
         uint32_t                            capacity;
         uint32_t                            curOffset;
         uint32_t                            curBatchStart;
@@ -66,7 +67,7 @@ static std::vector<DrawCmd> gFrameDrawCmds;
         bool                                bInFrame;
 
         void init(const uint32_t initialCapacity) noexcept {
-            pVerts = std::make_unique<VVertex_Draw[]>(initialCapacity);
+            pVerts = std::make_unique<T[]>(initialCapacity);
             capacity = initialCapacity;
             curOffset = 0;
             curBatchStart = 0;
@@ -83,7 +84,14 @@ static std::vector<DrawCmd> gFrameDrawCmds;
             bInFrame = false;
         }
 
-        VVertex_Draw* allocVerts(const uint32_t numVerts) noexcept {
+        void reset(const bool bStartFrame) noexcept {
+            curOffset = 0;
+            curBatchStart = 0;
+            curBatchSize = 0;
+            bInFrame = bStartFrame;
+        }
+
+        T* allocVerts(const uint32_t numVerts) noexcept {
             if (!bInFrame)
                 FatalErrors::raise("VDrawing: attempting to draw outside of a GLES renderer frame!");
 
@@ -94,13 +102,13 @@ static std::vector<DrawCmd> gFrameDrawCmds;
                     newCapacity *= 2;
                 }
 
-                std::unique_ptr<VVertex_Draw[]> pNewVerts = std::make_unique<VVertex_Draw[]>(newCapacity);
-                std::memcpy(pNewVerts.get(), pVerts.get(), (size_t) curOffset * sizeof(VVertex_Draw));
+                std::unique_ptr<T[]> pNewVerts = std::make_unique<T[]>(newCapacity);
+                std::memcpy(pNewVerts.get(), pVerts.get(), (size_t) curOffset * sizeof(T));
                 pVerts = std::move(pNewVerts);
                 capacity = newCapacity;
             }
 
-            VVertex_Draw* const pAllocVerts = pVerts.get() + curOffset;
+            T* const pAllocVerts = pVerts.get() + curOffset;
             curOffset += numVerts;
             curBatchSize += numVerts;
             return pAllocVerts;
@@ -114,8 +122,10 @@ static std::vector<DrawCmd> gFrameDrawCmds;
         }
     };
 
-    static bool             gbUseCpuVertexBuffer;   // True when the GLES renderer uses this module
-    static CpuVertexBuffer  gCpuVertexBuffer;
+    static bool                             gbUseCpuVertexBuffer;   // True when the GLES renderer uses this module
+    static bool                             gbUseCpuInstances;      // GLES renderer with instancing: primitives go into 'gCpuInstanceBuffer'
+    static CpuElementBuffer<VVertex_Draw>   gCpuVertexBuffer;
+    static CpuElementBuffer<VInstance_Draw> gCpuInstanceBuffer;
 #endif
 
 //------------------------------------------------------------------------------------------------------------------------------------------
@@ -129,6 +139,62 @@ static inline VVertex_Draw* allocDrawVerts(const uint32_t numVerts) noexcept {
 
     return gVertexBuffers_Draw.allocVerts<VVertex_Draw>(numVerts);
 }
+
+#if PSYDOOM_GLES_RENDERER
+//------------------------------------------------------------------------------------------------------------------------------------------
+// GLES renderer with instancing: allocates the instance of a primitive in the current draw batch, with the attributes that are the same
+// for all of its corners set. The corners are set with 'setInstanceCorner', in triangle strip order (see 'VInstance_Draw').
+//------------------------------------------------------------------------------------------------------------------------------------------
+static inline VInstance_Draw& allocDrawInstance(
+    const uint16_t texWinX,
+    const uint16_t texWinY,
+    const uint16_t texWinW,
+    const uint16_t texWinH,
+    const uint16_t clutX,
+    const uint16_t clutY,
+    const uint8_t stMulR,
+    const uint8_t stMulG,
+    const uint8_t stMulB,
+    const uint8_t stMulA
+) noexcept {
+    VInstance_Draw& inst = *gCpuInstanceBuffer.allocVerts(1);
+    inst.texWinX = texWinX;
+    inst.texWinY = texWinY;
+    inst.texWinW = texWinW;
+    inst.texWinH = texWinH;
+    inst.clutX = clutX;
+    inst.clutY = clutY;
+    inst.stmulR = stMulR;
+    inst.stmulG = stMulG;
+    inst.stmulB = stMulB;
+    inst.stmulA = stMulA;
+    return inst;
+}
+
+static inline void setInstanceCorner(
+    VInstance_Draw& inst,
+    const uint32_t corner,
+    const float x,
+    const float y,
+    const float z,
+    const float u,
+    const float v,
+    const uint8_t r,
+    const uint8_t g,
+    const uint8_t b,
+    const uint8_t lightDimModeFlags
+) noexcept {
+    inst.x[corner] = x;
+    inst.y[corner] = y;
+    inst.z[corner] = z;
+    inst.u[corner] = u;
+    inst.v[corner] = v;
+    inst.color[corner][0] = r;
+    inst.color[corner][1] = g;
+    inst.color[corner][2] = b;
+    inst.color[corner][3] = lightDimModeFlags;
+}
+#endif
 
 //------------------------------------------------------------------------------------------------------------------------------------------
 // Tells if the specified 'Main' pipeline type uses a descriptor set or not.
@@ -250,7 +316,9 @@ void shutdown() noexcept {
     #if PSYDOOM_GLES_RENDERER
         if (gbUseCpuVertexBuffer) {
             gCpuVertexBuffer.destroy();
+            gCpuInstanceBuffer.destroy();
             gbUseCpuVertexBuffer = false;
+            gbUseCpuInstances = false;
             return;
         }
     #endif
@@ -408,7 +476,12 @@ void endCurrentDrawBatch() noexcept {
 
     #if PSYDOOM_GLES_RENDERER
         if (gbUseCpuVertexBuffer) {
-            endBatch(gCpuVertexBuffer);
+            if (gbUseCpuInstances) {
+                endBatch(gCpuInstanceBuffer);
+            } else {
+                endBatch(gCpuVertexBuffer);
+            }
+
             return;
         }
     #endif
@@ -418,11 +491,19 @@ void endCurrentDrawBatch() noexcept {
 
 #if PSYDOOM_GLES_RENDERER
 //------------------------------------------------------------------------------------------------------------------------------------------
-// GLES renderer: initializes the drawing module to generate vertices into CPU memory, instead of using Vulkan
+// GLES renderer: initializes the drawing module to generate vertices into CPU memory, instead of using Vulkan.
+// With instancing (OpenGL ES 3.0) each primitive is generated as an instance instead.
 //------------------------------------------------------------------------------------------------------------------------------------------
-void initForGles() noexcept {
+void initForGles(const bool bUseInstancing) noexcept {
     gbUseCpuVertexBuffer = true;
-    gCpuVertexBuffer.init((4 * 1024 * 1024) / sizeof(VVertex_Draw));
+    gbUseCpuInstances = bUseInstancing;
+
+    if (bUseInstancing) {
+        gCpuInstanceBuffer.init((2 * 1024 * 1024) / sizeof(VInstance_Draw));
+    } else {
+        gCpuVertexBuffer.init((4 * 1024 * 1024) / sizeof(VVertex_Draw));
+    }
+
     gCurDrawPipelineType = (VPipelineType_Main) -1;
     gFrameUniforms.reserve(16);
     gFrameDrawCmds.reserve(4196);
@@ -434,10 +515,12 @@ void initForGles() noexcept {
 void beginFrameGles() noexcept {
     ASSERT(gbUseCpuVertexBuffer);
     ASSERT(gCurDrawPipelineType == (VPipelineType_Main) -1);
-    gCpuVertexBuffer.curOffset = 0;
-    gCpuVertexBuffer.curBatchStart = 0;
-    gCpuVertexBuffer.curBatchSize = 0;
-    gCpuVertexBuffer.bInFrame = true;
+
+    if (gbUseCpuInstances) {
+        gCpuInstanceBuffer.reset(true);
+    } else {
+        gCpuVertexBuffer.reset(true);
+    }
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
@@ -452,8 +535,16 @@ FrameDrawData getFrameDrawDataGles() noexcept {
     data.numCmds = (uint32_t) gFrameDrawCmds.size();
     data.pUniforms = gFrameUniforms.data();
     data.numUniforms = (uint32_t) gFrameUniforms.size();
-    data.pVerts = gCpuVertexBuffer.pVerts.get();
-    data.numVerts = gCpuVertexBuffer.curOffset;
+    data.bInstanced = gbUseCpuInstances;
+
+    if (gbUseCpuInstances) {
+        data.pInstances = gCpuInstanceBuffer.pVerts.get();
+        data.numInstances = gCpuInstanceBuffer.curOffset;
+    } else {
+        data.pVerts = gCpuVertexBuffer.pVerts.get();
+        data.numVerts = gCpuVertexBuffer.curOffset;
+    }
+
     return data;
 }
 
@@ -465,10 +556,8 @@ void endFrameGles() noexcept {
     gFrameDrawCmds.clear();
     gFrameUniforms.clear();
     gCurDrawPipelineType = (VPipelineType_Main) -1;
-    gCpuVertexBuffer.curOffset = 0;
-    gCpuVertexBuffer.curBatchStart = 0;
-    gCpuVertexBuffer.curBatchSize = 0;
-    gCpuVertexBuffer.bInFrame = false;
+    gCpuVertexBuffer.reset(false);
+    gCpuInstanceBuffer.reset(false);
 }
 #endif  // #if PSYDOOM_GLES_RENDERER
 
@@ -484,6 +573,17 @@ void addUILine(
     const uint8_t g,
     const uint8_t b
 ) noexcept {
+    #if PSYDOOM_GLES_RENDERER
+        if (gbUseCpuInstances) {
+            VInstance_Draw& inst = allocDrawInstance(0, 0, 0, 0, 0, 0, 255, 255, 255, 255);
+            setInstanceCorner(inst, 0, x1, y1, 0.0f, 0.0f, 0.0f, r, g, b, 0);
+            setInstanceCorner(inst, 1, x2, y2, 0.0f, 0.0f, 0.0f, r, g, b, 0);
+            setInstanceCorner(inst, 2, x2, y2, 0.0f, 0.0f, 0.0f, r, g, b, 0);   // Unused by lines
+            setInstanceCorner(inst, 3, x2, y2, 0.0f, 0.0f, 0.0f, r, g, b, 0);
+            return;
+        }
+    #endif
+
     // Fill in the vertices, starting first with common parameters
     VVertex_Draw* const pVerts = allocDrawVerts(2);
 
@@ -521,6 +621,17 @@ void addFlatColoredTriangle(
     const uint8_t g,
     const uint8_t b
 ) noexcept {
+    #if PSYDOOM_GLES_RENDERER
+        if (gbUseCpuInstances) {
+            VInstance_Draw& inst = allocDrawInstance(0, 0, 0, 0, 0, 0, 255, 255, 255, 255);
+            setInstanceCorner(inst, 0, x1, y1, z1, 0.0f, 0.0f, r, g, b, 0);
+            setInstanceCorner(inst, 1, x2, y2, z2, 0.0f, 0.0f, r, g, b, 0);
+            setInstanceCorner(inst, 2, x3, y3, z3, 0.0f, 0.0f, r, g, b, 0);
+            setInstanceCorner(inst, 3, x3, y3, z3, 0.0f, 0.0f, r, g, b, 0);
+            return;
+        }
+    #endif
+
     VVertex_Draw* const pVerts = allocDrawVerts(3);
 
     for (uint32_t i = 0; i < 3; ++i) {
@@ -560,6 +671,18 @@ void addFlatColoredQuad(
     const uint8_t g,
     const uint8_t b
 ) noexcept {
+    #if PSYDOOM_GLES_RENDERER
+        // Note: the triangles (1, 2, 3) and (3, 4, 1) as a strip
+        if (gbUseCpuInstances) {
+            VInstance_Draw& inst = allocDrawInstance(0, 0, 0, 0, 0, 0, 255, 255, 255, 255);
+            setInstanceCorner(inst, 0, x2, y2, z2, 0.0f, 0.0f, r, g, b, 0);
+            setInstanceCorner(inst, 1, x3, y3, z3, 0.0f, 0.0f, r, g, b, 0);
+            setInstanceCorner(inst, 2, x1, y1, z1, 0.0f, 0.0f, r, g, b, 0);
+            setInstanceCorner(inst, 3, x4, y4, z4, 0.0f, 0.0f, r, g, b, 0);
+            return;
+        }
+    #endif
+
     VVertex_Draw* const pVerts = allocDrawVerts(6);
 
     for (uint32_t i = 0; i < 6; ++i) {
@@ -603,6 +726,27 @@ void addUISprite(
     const uint16_t texWinW,
     const uint16_t texWinH
 ) noexcept {
+    #if PSYDOOM_GLES_RENDERER
+        // Note: the triangles (TL, TR, BR) and (BR, BL, TL) as a strip
+        if (gbUseCpuInstances) {
+            const float xl = x;
+            const float xr = x + w;
+            const float yt = y;
+            const float yb = y + h;
+            const float ul = u;
+            const float ur = u + w;
+            const float vt = v;
+            const float vb = v + h;
+
+            VInstance_Draw& inst = allocDrawInstance(texPageX, texPageY, texWinW, texWinH, clutX, clutY, 128, 128, 128, a);
+            setInstanceCorner(inst, 0, xr, yt, 0.0f, ur, vt, r, g, b, 0);
+            setInstanceCorner(inst, 1, xr, yb, 0.0f, ur, vb, r, g, b, 0);
+            setInstanceCorner(inst, 2, xl, yt, 0.0f, ul, vt, r, g, b, 0);
+            setInstanceCorner(inst, 3, xl, yb, 0.0f, ul, vb, r, g, b, 0);
+            return;
+        }
+    #endif
+
     // Fill in the vertices, starting first with common parameters
     VVertex_Draw* const pVerts = allocDrawVerts(6);
 
@@ -690,6 +834,17 @@ void addWorldTriangle(
     const uint8_t stMulB,
     const uint8_t stMulA
 ) noexcept {
+    #if PSYDOOM_GLES_RENDERER
+        if (gbUseCpuInstances) {
+            VInstance_Draw& inst = allocDrawInstance(texWinX, texWinY, texWinW, texWinH, clutX, clutY, stMulR, stMulG, stMulB, stMulA);
+            setInstanceCorner(inst, 0, x1, y1, z1, u1, v1, r, g, b, lightDimModeFlags);
+            setInstanceCorner(inst, 1, x2, y2, z2, u2, v2, r, g, b, lightDimModeFlags);
+            setInstanceCorner(inst, 2, x3, y3, z3, u3, v3, r, g, b, lightDimModeFlags);
+            setInstanceCorner(inst, 3, x3, y3, z3, u3, v3, r, g, b, lightDimModeFlags);
+            return;
+        }
+    #endif
+
     // Fill in the vertices, starting first with common parameters
     VVertex_Draw* const pVerts = allocDrawVerts(3);
 
@@ -746,6 +901,18 @@ void addWorldQuad(
     const uint8_t stMulB,
     const uint8_t stMulA
 ) noexcept {
+    #if PSYDOOM_GLES_RENDERER
+        // Note: the triangles (1, 2, 3) and (3, 4, 1) as a strip
+        if (gbUseCpuInstances) {
+            VInstance_Draw& inst = allocDrawInstance(texWinX, texWinY, texWinW, texWinH, clutX, clutY, stMulR, stMulG, stMulB, stMulA);
+            setInstanceCorner(inst, 0, v2.x, v2.y, v2.z, v2.u, v2.v, v2.r, v2.g, v2.b, lightDimModeFlags);
+            setInstanceCorner(inst, 1, v3.x, v3.y, v3.z, v3.u, v3.v, v3.r, v3.g, v3.b, lightDimModeFlags);
+            setInstanceCorner(inst, 2, v1.x, v1.y, v1.z, v1.u, v1.v, v1.r, v1.g, v1.b, lightDimModeFlags);
+            setInstanceCorner(inst, 3, v4.x, v4.y, v4.z, v4.u, v4.v, v4.r, v4.g, v4.b, lightDimModeFlags);
+            return;
+        }
+    #endif
+
     // Fill in the vertices, starting first with the parameters that are the same for all vertices
     VVertex_Draw* const pVerts = allocDrawVerts(6);
 
@@ -804,6 +971,25 @@ void addWorldInfiniteSkyWall(
     const uint16_t texWinW,
     const uint16_t texWinH
 ) noexcept {
+    #if PSYDOOM_GLES_RENDERER
+        // Note: the same triangles as below, (A, B, C) and (B, A, D), as the strip (C, A, B, D), where A and D are at x1 and B and C at
+        // x2, A and C at the low end, B and D at the high end.
+        if (gbUseCpuInstances) {
+            constexpr float EXTRUDE_AMT = 1024.0f;
+            const float yLo = (bIsUpperSkyWall) ? y : y - EXTRUDE_AMT;
+            const float yHi = (bIsUpperSkyWall) ? y + EXTRUDE_AMT : y;
+            const float vLo = (bIsUpperSkyWall) ? 0.0f : -1.0f;
+            const float vHi = (bIsUpperSkyWall) ? 1.0f : 0.0f;
+
+            VInstance_Draw& inst = allocDrawInstance(texWinX, texWinY, texWinW, texWinH, clutX, clutY, 128, 128, 128, 128);
+            setInstanceCorner(inst, 0, x2, yLo, z2, skyUOffset, vLo, 128, 128, 128, 0);
+            setInstanceCorner(inst, 1, x1, yLo, z1, skyUOffset, vLo, 128, 128, 128, 0);
+            setInstanceCorner(inst, 2, x2, yHi, z2, skyUOffset, vHi, 128, 128, 128, 0);
+            setInstanceCorner(inst, 3, x1, yHi, z1, skyUOffset, vHi, 128, 128, 128, 0);
+            return;
+        }
+    #endif
+
     // Fill in the vertices, starting first with common parameters.
     // Note: we store the sky U offset based on player rotation in the U coordinate.
     VVertex_Draw* const pVerts = allocDrawVerts(6);
@@ -882,6 +1068,18 @@ void addWorldSkyQuad(
     const uint16_t texWinW,
     const uint16_t texWinH
 ) noexcept {
+    #if PSYDOOM_GLES_RENDERER
+        // Note: the triangles (1, 2, 3) and (3, 4, 1) as a strip
+        if (gbUseCpuInstances) {
+            VInstance_Draw& inst = allocDrawInstance(texWinX, texWinY, texWinW, texWinH, clutX, clutY, 128, 128, 128, 128);
+            setInstanceCorner(inst, 0, x2, y2, z2, skyUOffset, 0.0f, 128, 128, 128, 0);
+            setInstanceCorner(inst, 1, x3, y3, z3, skyUOffset, 0.0f, 128, 128, 128, 0);
+            setInstanceCorner(inst, 2, x1, y1, z1, skyUOffset, 0.0f, 128, 128, 128, 0);
+            setInstanceCorner(inst, 3, x4, y4, z4, skyUOffset, 0.0f, 128, 128, 128, 0);
+            return;
+        }
+    #endif
+
     // Fill in the vertices, starting first with common parameters.
     // Note: we store the sky U offset based on player rotation in the U coordinate.
     VVertex_Draw* const pVerts = allocDrawVerts(6);

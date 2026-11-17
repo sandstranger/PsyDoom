@@ -68,6 +68,7 @@ struct GShaderOptions {
     bool    bUseProgramBinaries;    // Use the program binary cache (needs a driver with program binary formats)
     bool    bHighpFragment;         // OpenGL ES 2.0: 'highp' floats in fragment shaders (needed by the draw programs)
     bool    bMakeDrawPrograms;      // Make the draw programs (not if the main render path is not supported)
+    bool    bInstancing;            // OpenGL ES 3.0: the draw programs take one instance per primitive ('VInstance_Draw')
     char    vramHiChannel;          // OpenGL ES 2.0: the channel with the high byte of the VRAM texels ('g' for RG8, 'a' for luminance alpha)
 };
 
@@ -86,6 +87,17 @@ static constexpr GLuint ATTRIB_CLUT_POS         = 5;
 static constexpr GLuint ATTRIB_STMUL            = 6;
 static constexpr GLuint NUM_DRAW_ATTRIBS        = 7;
 static constexpr GLuint ATTRIB_CORNER           = 0;
+
+// Vertex attribute locations of the draw programs with instancing (OpenGL ES 3.0): 'VInstance_Draw', one per instance
+static constexpr GLuint INST_ATTRIB_X           = 0;
+static constexpr GLuint INST_ATTRIB_Y           = 1;
+static constexpr GLuint INST_ATTRIB_Z           = 2;
+static constexpr GLuint INST_ATTRIB_U           = 3;
+static constexpr GLuint INST_ATTRIB_V           = 4;
+static constexpr GLuint INST_ATTRIB_COLORS      = 5;
+static constexpr GLuint INST_ATTRIB_TEXWIN      = 6;
+static constexpr GLuint INST_ATTRIB_CLUT_STMUL  = 7;
+static constexpr GLuint NUM_INST_ATTRIBS        = 8;
 
 // Texture units used by the programs
 static constexpr GLuint TEX_UNIT_VRAM       = 0;    // Draw programs: PSX VRAM

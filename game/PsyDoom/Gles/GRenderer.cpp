@@ -166,6 +166,9 @@ static TexFormat    gVramFormat;            // Format of PSX VRAM, the staging t
 static TexFormat    gGammaLutFormat;        // Format of the gamma remap table: 8 bits per texel
 static TexFormat    gRgba8Format;           // RGBA8 textures (loading plaques, movies and logos)
 static bool         gbStagedVramUpdates;    // Whether PSX VRAM updates are copied in by the GPU
+static bool         gbInstancingAllowed = true;     // Whether instancing may be used (Android: set by the launcher through JNA)
+static bool         gbInstancing;           // OpenGL ES 3.0: each primitive of the main render path is drawn as an instance ('VInstance_Draw')
+static bool         gbBaseInstance;         // Instancing: draws start at their first instance with EXT_base_instance (else attributes move)
 
 // Size of the screen (window surface) in pixels
 static uint32_t     gScreenW;
@@ -779,10 +782,22 @@ static bool determineCaps() noexcept {
         (glMinSampleShadingOES != nullptr)
     );
 
+    // Instancing: core in OpenGL ES 3.0 (the OpenGL ES 2.0 path draws vertices).
+    // Draws start at their first instance with EXT_base_instance, otherwise the instance attributes are moved to it for each draw.
+    gbInstancing = (
+        isGles3() &&
+        gbInstancingAllowed &&
+        (glDrawArraysInstanced != nullptr) &&
+        (glVertexAttribDivisor != nullptr)
+    );
+
+    gbBaseInstance = (gbInstancing && GLAD_GL_EXT_base_instance && (glDrawArraysInstancedBaseInstanceEXT != nullptr));
+
     const bool b16BitColor = (gDrawColorFormat.type == GL_UNSIGNED_SHORT_5_5_5_1);
+    const char* const instancingStr = (gbBaseInstance) ? " | instancing (base instance)" : (gbInstancing) ? " | instancing" : "";
 
     SDL_Log(
-        "PsyDoom GLES: %s | %s | %s | OpenGL ES %s path%s | color %s | MSAA %dx (%s, wanted %dx)%s",
+        "PsyDoom GLES: %s | %s | %s | OpenGL ES %s path%s | color %s | MSAA %dx (%s, wanted %dx)%s%s",
         pVendor,
         pRenderer,
         pVersion,
@@ -792,7 +807,8 @@ static bool determineCaps() noexcept {
         (int) gNumSamples,
         getMsaaModeName(gMsaaMode),
         (int) std::max(Config::gAAMultisamples, 1),
-        (gbPerSampleShading) ? ", sample rate shading" : ""
+        (gbPerSampleShading) ? ", sample rate shading" : "",
+        instancingStr
     );
 
     return true;
@@ -1152,6 +1168,26 @@ static void setDrawVertexAttribPointers() noexcept {
     }
 }
 
+// Instancing (OpenGL ES 3.0): points the instance attributes at the bound buffer, starting at the given instance. The 'VInstance_Draw'
+// layout: positions and texture coordinates as one vec4 per component (a value per corner), the corner colors as one uint per corner,
+// the texture window as 4 ushorts and the CLUT position and semi-transparency multiply as 2 uints.
+static void setDrawInstanceAttribPointers(const uint32_t firstInstance) noexcept {
+    constexpr GLsizei STRIDE = (GLsizei) sizeof(VInstance_Draw);
+    static_assert(offsetof(VInstance_Draw, stmulR) == offsetof(VInstance_Draw, clutX) + 4);
+
+    const uintptr_t base = (uintptr_t) firstInstance * sizeof(VInstance_Draw);
+    const auto offset = [=](const size_t fieldOffset) noexcept { return (const void*)(base + fieldOffset); };
+
+    glVertexAttribPointer(GShaders::INST_ATTRIB_X, 4, GL_FLOAT, GL_FALSE, STRIDE, offset(offsetof(VInstance_Draw, x)));
+    glVertexAttribPointer(GShaders::INST_ATTRIB_Y, 4, GL_FLOAT, GL_FALSE, STRIDE, offset(offsetof(VInstance_Draw, y)));
+    glVertexAttribPointer(GShaders::INST_ATTRIB_Z, 4, GL_FLOAT, GL_FALSE, STRIDE, offset(offsetof(VInstance_Draw, z)));
+    glVertexAttribPointer(GShaders::INST_ATTRIB_U, 4, GL_FLOAT, GL_FALSE, STRIDE, offset(offsetof(VInstance_Draw, u)));
+    glVertexAttribPointer(GShaders::INST_ATTRIB_V, 4, GL_FLOAT, GL_FALSE, STRIDE, offset(offsetof(VInstance_Draw, v)));
+    glVertexAttribIPointer(GShaders::INST_ATTRIB_COLORS, 4, GL_UNSIGNED_INT, STRIDE, offset(offsetof(VInstance_Draw, color)));
+    glVertexAttribIPointer(GShaders::INST_ATTRIB_TEXWIN, 4, GL_UNSIGNED_SHORT, STRIDE, offset(offsetof(VInstance_Draw, texWinX)));
+    glVertexAttribIPointer(GShaders::INST_ATTRIB_CLUT_STMUL, 2, GL_UNSIGNED_INT, STRIDE, offset(offsetof(VInstance_Draw, clutX)));
+}
+
 static void initStreamSlots() noexcept {
     for (StreamSlot& slot : gStreamSlots) {
         slot = {};
@@ -1160,16 +1196,27 @@ static void initStreamSlots() noexcept {
         slot.vboSize = 1024 * 1024;
         glBufferData(GL_ARRAY_BUFFER, slot.vboSize, nullptr, GL_STREAM_DRAW);
 
-        // OpenGL ES 3.0: a VAO per slot and the uniform buffer (OpenGL ES 2.0 sets the attributes and uniforms as it draws)
+        // OpenGL ES 3.0: a VAO per slot and the uniform buffer (OpenGL ES 2.0 sets the attributes and uniforms as it draws).
+        // With instancing the attributes advance once per instance.
         if (isGles3()) {
             glGenVertexArrays(1, &slot.vao);
             glBindVertexArray(slot.vao);
 
-            for (GLuint attrib = 0; attrib < GShaders::NUM_DRAW_ATTRIBS; ++attrib) {
-                glEnableVertexAttribArray(attrib);
+            if (gbInstancing) {
+                for (GLuint attrib = 0; attrib < GShaders::NUM_INST_ATTRIBS; ++attrib) {
+                    glEnableVertexAttribArray(attrib);
+                    glVertexAttribDivisor(attrib, 1);
+                }
+
+                setDrawInstanceAttribPointers(0);
+            } else {
+                for (GLuint attrib = 0; attrib < GShaders::NUM_DRAW_ATTRIBS; ++attrib) {
+                    glEnableVertexAttribArray(attrib);
+                }
+
+                setDrawVertexAttribPointers();
             }
 
-            setDrawVertexAttribPointers();
             glBindVertexArray(0);
 
             glGenBuffers(1, &slot.ubo);
@@ -1340,13 +1387,23 @@ static void drawMainFrame(const VDrawing::FrameDrawData& frameData, const uint32
     const GLsizeiptr vertsSize = (GLsizeiptr) frameData.numVerts * (GLsizeiptr) sizeof(VVertex_Draw);
     GLsizeiptr uniformBlockStride = 0;
 
+    // Note: the frame is recorded with instances when instancing is used (see 'GRenderer::init')
+    const bool bInstanced = frameData.bInstanced;
+    ASSERT(bInstanced == gbInstancing);
+
     if (isGles3()) {
         // Get the buffers for this frame, waiting until the GPU is done with the frame that used them last (normally long done)
         waitForAndDeleteFence(slot.fence);
         uniformBlockStride = ((GLsizeiptr) sizeof(DrawUniformBlock) + gUboOffsetAlignment - 1) / gUboOffsetAlignment * gUboOffsetAlignment;
         const GLsizeiptr uniformsSize = packFrameUniforms(frameData, uniformBlockStride);
         uploadToStreamBuffer(GL_UNIFORM_BUFFER, slot.ubo, slot.uboSize, gUniformUploadBuffer.data(), uniformsSize);
-        uploadToStreamBuffer(GL_ARRAY_BUFFER, slot.vbo, slot.vboSize, frameData.pVerts, vertsSize);
+
+        if (bInstanced) {
+            const GLsizeiptr instancesSize = (GLsizeiptr) frameData.numInstances * (GLsizeiptr) sizeof(VInstance_Draw);
+            uploadToStreamBuffer(GL_ARRAY_BUFFER, slot.vbo, slot.vboSize, frameData.pInstances, instancesSize);
+        } else {
+            uploadToStreamBuffer(GL_ARRAY_BUFFER, slot.vbo, slot.vboSize, frameData.pVerts, vertsSize);
+        }
     } else if (vertsSize > 0) {
         // OpenGL ES 2.0 has no fences: the buffer's storage is replaced ('orphaned') every frame, so the driver never waits on the GPU
         glBindBuffer(GL_ARRAY_BUFFER, slot.vbo);
@@ -1372,6 +1429,7 @@ static void drawMainFrame(const VDrawing::FrameDrawData& frameData, const uint32
     // Vertices and the uniforms in effect before any are set (zeroed)
     if (isGles3()) {
         glBindVertexArray(slot.vao);
+        glBindBuffer(GL_ARRAY_BUFFER, slot.vbo);    // Instancing without EXT_base_instance: the attributes are moved per draw
         glBindBufferRange(GL_UNIFORM_BUFFER, GShaders::DRAW_UNIFORMS_BINDING, slot.ubo, 0, (GLsizeiptr) sizeof(DrawUniformBlock));
     } else {
         glBindBuffer(GL_ARRAY_BUFFER, slot.vbo);
@@ -1417,17 +1475,32 @@ static void drawMainFrame(const VDrawing::FrameDrawData& frameData, const uint32
             }   break;
 
             case VDrawing::DrawCmdType::Draw: {
-                if (!isGles3()) {
-                    applyDrawUniforms(program);
-                }
+                if (bInstanced) {
+                    // One instance per primitive: count and offset are in instances. Lines are 2 vertices, the rest 4 (a strip).
+                    const bool bLines = (primitiveType == GL_LINES);
+                    const GLenum mode = (bLines) ? GL_LINES : GL_TRIANGLE_STRIP;
+                    const GLsizei vertsPerInstance = (bLines) ? 2 : 4;
 
-                glDrawArrays(primitiveType, (GLint) cmd.arg2, (GLsizei) cmd.arg1);
+                    if (gbBaseInstance) {
+                        glDrawArraysInstancedBaseInstanceEXT(mode, 0, vertsPerInstance, (GLsizei) cmd.arg1, cmd.arg2);
+                    } else {
+                        setDrawInstanceAttribPointers(cmd.arg2);
+                        glDrawArraysInstanced(mode, 0, vertsPerInstance, (GLsizei) cmd.arg1);
+                    }
+                } else {
+                    if (!isGles3()) {
+                        applyDrawUniforms(program);
+                    }
+
+                    glDrawArrays(primitiveType, (GLint) cmd.arg2, (GLsizei) cmd.arg1);
+                }
             }   break;
         }
     }
 
     if (isGles3()) {
         glBindVertexArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
     } else {
         setNumEnabledVertexAttribs(0);
         glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -1687,6 +1760,7 @@ static void initGlResources() noexcept {
     shaderOptions.bUseProgramBinaries = bUseProgramBinaries;
     shaderOptions.bHighpFragment = gCaps.bHighpFragment;
     shaderOptions.bMakeDrawPrograms = true;
+    shaderOptions.bInstancing = gbInstancing;
     shaderOptions.vramHiChannel = (gVramFormat.format == GL_LUMINANCE_ALPHA) ? 'a' : 'g';
     GShaders::init(shaderOptions);
     invalidateStateCache();
@@ -1785,7 +1859,7 @@ bool init(SDL_Window* const pWindow, const GApi api) noexcept {
 
     fitPsxVramToMaxTextureSize();
     VRenderer::updateCoordSysInfo(0, 0);    // Invalid until the first frame
-    VDrawing::initForGles();
+    VDrawing::initForGles(gbInstancing);
     initGlResources();
 
     // Start on the same render path as the Vulkan renderer would
@@ -2016,6 +2090,25 @@ bool didRenderToAllFrameHistory() noexcept {
     return true;
 }
 
+//------------------------------------------------------------------------------------------------------------------------------------------
+// Whether the OpenGL ES 3.0 path may draw with instancing (the default). Takes effect the next time the renderer is made.
+//------------------------------------------------------------------------------------------------------------------------------------------
+void setInstancingAllowed(const bool bAllowed) noexcept {
+    gbInstancingAllowed = bAllowed;
+}
+
 END_NAMESPACE(GRenderer)
+
+//------------------------------------------------------------------------------------------------------------------------------------------
+// Android: the launcher can turn instancing off for the OpenGL ES 3.0 path through JNA (on by default)
+//------------------------------------------------------------------------------------------------------------------------------------------
+#if ANDROID
+extern "C" {
+__attribute__((used)) __attribute__((visibility("default")))
+void setUseGLES3Instancing(const bool useInstancing) {
+    GRenderer::setInstancingAllowed(useInstancing);
+}
+}
+#endif
 
 #endif  // #if PSYDOOM_GLES_RENDERER

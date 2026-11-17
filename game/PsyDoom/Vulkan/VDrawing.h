@@ -24,6 +24,10 @@ enum class VPipelineType_Main : uint8_t;
 struct VShaderUniforms_Draw;
 struct VVertex_Draw;
 
+#if PSYDOOM_GLES_RENDERER
+    struct VInstance_Draw;
+#endif
+
 BEGIN_NAMESPACE(VDrawing)
 
 // Attributes which are specified uniquely per vertex for 'addWorldQuad'
@@ -56,6 +60,8 @@ struct DrawCmd {
     //--------------------------------------------------------------------------------------------------------------------------------------
     // GLES renderer: everything drawn in the frame, for it to upload and replay at the end of the frame.
     // With the GLES renderer vertices are generated into CPU memory and uploaded once per frame (no buffers mapped while drawing).
+    // With instancing (OpenGL ES 3.0) each primitive is an instance instead ('VInstance_Draw'): the vertex counts and offsets of the
+    // draw commands are then instance counts and offsets.
     //--------------------------------------------------------------------------------------------------------------------------------------
     struct FrameDrawData {
         const DrawCmd*                  pCmds;
@@ -64,9 +70,12 @@ struct DrawCmd {
         uint32_t                        numUniforms;
         const VVertex_Draw*             pVerts;
         uint32_t                        numVerts;
+        const VInstance_Draw*           pInstances;
+        uint32_t                        numInstances;
+        bool                            bInstanced;
     };
 
-    void initForGles() noexcept;
+    void initForGles(const bool bUseInstancing) noexcept;
     void beginFrameGles() noexcept;
     FrameDrawData getFrameDrawDataGles() noexcept;
     void endFrameGles() noexcept;
