@@ -75,11 +75,11 @@ static bool waitForAsyncNetworkOp(bool& bFinishedFlag, const bool bIsAbortable) 
         }
 
         // While we are waiting update the display to help prevent stutter after long pauses (if we are waiting a long time).
-        // See the 'Utils.cpp' file for more comments on this issue; we don't do this for the Vulkan backend also.
-        if (Video::gBackendType != Video::BackendType::Vulkan) {
+        // See the 'Utils.cpp' file for more comments on this issue; we don't do this for the Vulkan backend (or its OpenGL ES version) also.
+        if (!Video::isUsingNewRendererBackend()) {
             Video::displayFramebuffer();
         } else {
-            // Quick hack for the Vulkan renderer, in case the user resizes the screen while we are connecting - redraw everything...
+            // Quick hack for the Vulkan (and OpenGL ES) renderer, in case the user resizes the screen while we are connecting - redraw everything...
             M_DrawNetworkConnectDisplay();
         }
 

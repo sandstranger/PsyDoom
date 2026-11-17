@@ -164,9 +164,9 @@ static bool waitForCond(const T& condLamba) noexcept {
         // Refreshing the display helps prevent a brief (temporary) stutter issue after long pauses - I'm not sure why, maybe an SDL bug?
         // Doing a vsync'd present also reduces idle CPU usage a lot more than a spinning loop with thread yield.
         //
-        // Vulkan backend: this causes issues with certain things like crossfade, which rely on previous framebuffers.
-        // Don't do this if we are outputting via Vulkan.
-        if (Video::gBackendType != Video::BackendType::Vulkan) {
+        // Vulkan backend and its OpenGL ES version: this causes issues with certain things like crossfade, which rely on previous framebuffers.
+        // Don't do this if we are outputting via either of them.
+        if (!Video::isUsingNewRendererBackend()) {
             Video::displayFramebuffer();
         }
 

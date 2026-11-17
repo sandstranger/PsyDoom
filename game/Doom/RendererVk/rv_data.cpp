@@ -84,8 +84,8 @@ void RV_InitLevelData() noexcept {
     ASSERT(gpSegs);
     ASSERT(gpLeafEdges);
 
-    // If Vulkan is not supported then this is a no-op
-    if (Video::gBackendType != Video::BackendType::Vulkan)
+    // A no-op without a backend having the new renderer: Vulkan, or its OpenGL ES version (which draws the same RV_* data)
+    if (!Video::isUsingNewRendererBackend())
         return;
 
     // Initialize basic data structures
@@ -97,10 +97,7 @@ void RV_InitLevelData() noexcept {
 // Free data-structures used by the Vulkan renderer on level shutdown
 //------------------------------------------------------------------------------------------------------------------------------------------
 void RV_FreeLevelData() noexcept {
-    // If Vulkan is not supported then this is a no-op
-    if (Video::gBackendType != Video::BackendType::Vulkan)
-        return;
-
+    // Nothing to free if they were never made (a backend without the new renderer)
     gpRvLeafEdges.reset();
     gpRvSegs.reset();
 }
