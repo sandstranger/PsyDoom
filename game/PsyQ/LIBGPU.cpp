@@ -49,7 +49,7 @@ static void clearDrawingArea(const uint8_t r, const uint8_t g, const uint8_t b) 
     // Skip clearing the PSX drawing area if we are using the new Vulkan renderer for this frame and are not switching to the PSX renderer
     #if PSYDOOM_VULKAN_RENDERER
         if (Video::isUsingVulkanRenderPath()) {
-            if (&VRenderer::getNextRenderPath() != &VRenderer::gRenderPath_Psx) {
+            if (!VRenderer::isNextRenderPathPsx()) {
                 return;
             }
         }
@@ -230,9 +230,9 @@ void LIBGPU_LoadImage(const SRECT& dstRect, const uint16_t* const pImageData) no
         }
     }
 
-    // Vulkan renderer: push this upload to the Vulkan texture mirroring PSX VRAM
+    // Vulkan renderer (or its GLES version): push this upload to the texture mirroring PSX VRAM
     #if PSYDOOM_VULKAN_RENDERER
-        if (Video::gBackendType == Video::BackendType::Vulkan) {
+        if (Video::isUsingNewRendererBackend()) {
             VRenderer::pushPsxVramUpdates(dstLx, dstRx, dstTy, dstBy);
         }
     #endif  // #if PSYDOOM_VULKAN_RENDERER

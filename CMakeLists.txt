@@ -37,6 +37,7 @@ set(AUDIO_TOOLS_COMMON_TGT_NAME         AudioToolsCommon)
 set(BASELIB_TGT_NAME                    BaseLib)
 set(DOOM_DISASM_TGT_NAME                DoomDisassemble)
 set(FLTK_TGT_NAME                       FLTK)
+set(GLAD_TGT_NAME                       Glad)
 set(GAME_TGT_NAME                       PsyDoom)
 set(HASH_LIBRARY_TGT_NAME               Hash-Library)
 set(LCD_TOOL_TGT_NAME                   LcdTool)
@@ -65,6 +66,23 @@ endif ()
 set(PSYDOOM_INCLUDE_VULKAN_RENDERER TRUE CACHE BOOL
 "If TRUE (default) then compile in support for the new Vulkan renderer.
 Disabling this setting may make it easier to port to platforms which don't support Vulkan.")
+
+# Compile in support for the OpenGL ES 3.0 renderer?
+# It is a second backend for the new renderer (the same features as the Vulkan one), made for tile based mobile GPUs.
+# It shares the renderer frontend with the Vulkan renderer, so that one must be compiled in too.
+if (ANDROID)
+    set(PSYDOOM_INCLUDE_GLES_RENDERER_DEFAULT TRUE)
+else()
+    set(PSYDOOM_INCLUDE_GLES_RENDERER_DEFAULT FALSE)
+endif()
+
+set(PSYDOOM_INCLUDE_GLES_RENDERER ${PSYDOOM_INCLUDE_GLES_RENDERER_DEFAULT} CACHE BOOL
+"If TRUE then compile in support for the OpenGL ES 3.0 renderer (on by default on Android).
+It is used where Vulkan is unavailable or when chosen (see 'setUseGLES3Renderer'). Requires the Vulkan renderer to be compiled in too.")
+
+if (PSYDOOM_INCLUDE_GLES_RENDERER AND (NOT PSYDOOM_INCLUDE_VULKAN_RENDERER))
+    message(FATAL_ERROR "PSYDOOM_INCLUDE_GLES_RENDERER requires PSYDOOM_INCLUDE_VULKAN_RENDERER (the renderer frontend is shared).")
+endif()
 
 # Enable certain limit removing features?
 set(PSYDOOM_LIMIT_REMOVING TRUE CACHE BOOL
@@ -130,6 +148,10 @@ endif ()
 
     if (PSYDOOM_INCLUDE_VULKAN_RENDERER)
         add_subdirectory("${PROJECT_SOURCE_DIR}/vulkan_gl")
+    endif()
+
+    if (PSYDOOM_INCLUDE_GLES_RENDERER)
+        add_subdirectory("${PROJECT_SOURCE_DIR}/third_party_libs/glad")
     endif()
 endif()
 

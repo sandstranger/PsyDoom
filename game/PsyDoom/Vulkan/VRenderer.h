@@ -71,11 +71,14 @@ IVRendererPath& getActiveRenderPath() noexcept;
 IVRendererPath& getNextRenderPath() noexcept;
 void setNextRenderPath(IVRendererPath& renderPath) noexcept;
 bool isUsingPsxRenderPath() noexcept;
+bool isNextRenderPathPsx() noexcept;
 void switchToPsxRenderPath() noexcept;
 void switchToMainVulkanRenderPath() noexcept;
 bool isSwapchainOutOfDate() noexcept;
 void rebuildGammaAdjustTex() noexcept;
 void setupViewportAndScissors(vgl::CmdBufferRecorder& cmdRec) noexcept;
+void getDrawViewport(int32_t& x, int32_t& y, int32_t& w, int32_t& h) noexcept;
+void updateCoordSysInfo(const uint32_t presentSurfaceW, const uint32_t presentSurfaceH) noexcept;
 
 END_NAMESPACE(VRenderer)
 

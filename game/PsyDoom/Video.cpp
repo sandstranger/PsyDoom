@@ -13,6 +13,7 @@
 #include "ProgArgs.h"
 #include "PsxVm.h"
 #include "Utils.h"
+#include "VideoBackend_GLES.h"
 #include "VideoBackend_SDL.h"
 #include "VideoBackend_Vulkan.h"
 #include "Vulkan/VRenderer.h"
@@ -31,8 +32,25 @@ static VideoBackend_SDL gVideoBackend_SDL;
     static VideoBackend_Vulkan gVideoBackend_Vulkan;
 #endif
 
+#if PSYDOOM_GLES_RENDERER
+    // OpenGL ES 3.0 video backend that can do the classic renderer plus the GLES version of the new renderer
+    static VideoBackend_GLES gVideoBackend_GLES;
+
+    // Use the OpenGL ES 3.0 backend even if Vulkan is available? (Android: set by the launcher through JNA)
+    static bool gbUseGles3Renderer = false;
+#endif
+
 // Pointer to the video backend implementation in use
 static IVideoBackend* gpVideoBackend;
+
+#if ANDROID && PSYDOOM_GLES_RENDERER
+extern "C" {
+__attribute__((used)) __attribute__((visibility("default")))
+void setUseGLES3Renderer(const bool useGLES3Renderer) {
+    gbUseGles3Renderer = useGLES3Renderer;
+}
+}
+#endif
 
 SDL_Window*     gpSdlWindow;    // The SDL window being used
 BackendType     gBackendType;   // Which type of video backend is in use
@@ -115,6 +133,15 @@ static void decideStartupResolution(const uint8_t displayIndex, int32_t& w, int3
 // Utility: determines which video backend to use (requires a window to do so)
 //------------------------------------------------------------------------------------------------------------------------------------------
 static void determineVideoBackend() noexcept {
+    // The OpenGL ES 3.0 backend if asked for
+    #if PSYDOOM_GLES_RENDERER
+        if (gbUseGles3Renderer) {
+            gpVideoBackend = &gVideoBackend_GLES;
+            gBackendType = BackendType::GLES;
+            return;
+        }
+    #endif
+
     #if PSYDOOM_VULKAN_RENDERER
         if ((!Config::gbDisableVulkanRenderer) && VideoBackend_Vulkan::isBackendSupported()) {
             gpVideoBackend = &gVideoBackend_Vulkan;
@@ -123,8 +150,15 @@ static void determineVideoBackend() noexcept {
         }
     #endif
 
-    gpVideoBackend = &gVideoBackend_SDL;
-    gBackendType = BackendType::SDL;
+    // No Vulkan (or disabled): the OpenGL ES 3.0 backend, which has the same new renderer.
+    // If OpenGL ES 3.0 turns out not to be available either, the SDL backend is used instead (see 'initVideo').
+    #if PSYDOOM_GLES_RENDERER
+        gpVideoBackend = &gVideoBackend_GLES;
+        gBackendType = BackendType::GLES;
+    #else
+        gpVideoBackend = &gVideoBackend_SDL;
+        gBackendType = BackendType::SDL;
+    #endif
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
@@ -233,6 +267,9 @@ void initVideo() noexcept {
         gpSdlWindowIcon = SDL_CreateRGBSurfaceWithFormatFrom((void*) gIcon_64_raw_rgb888, 64, 64, 24, 64 * 3, SDL_PIXELFORMAT_RGB24);
     #endif
 
+    // Backend specific setup before the window is created
+    gpVideoBackend->prepareForWindowCreate();
+
 #ifdef ANDROID
     gpSdlWindow = SDL_CreateWindow(
             Utils::getGameVersionString(),
@@ -268,8 +305,24 @@ void initVideo() noexcept {
         }
     #endif
     
-    // Initialize the video backend
-    gpVideoBackend->initRenderers(gpSdlWindow);
+    // Initialize the video backend.
+    // The OpenGL ES 3.0 backend can only tell if OpenGL ES 3.0 is available once it has a window: if not, use the SDL backend instead.
+    // Both use an OpenGL window. The SDL renderer wants an OpenGL ES 2.0 context (any later version is compatible with it).
+    #if PSYDOOM_GLES_RENDERER
+        if (gBackendType == BackendType::GLES) {
+            if (!gVideoBackend_GLES.tryInitRenderers(gpSdlWindow)) {
+                gpVideoBackend = &gVideoBackend_SDL;
+                gBackendType = BackendType::SDL;
+                SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
+                SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+                gpVideoBackend->initRenderers(gpSdlWindow);
+            }
+        } else {
+            gpVideoBackend->initRenderers(gpSdlWindow);
+        }
+    #else
+        gpVideoBackend->initRenderers(gpSdlWindow);
+    #endif
 
     // Hide the cursor and switch to relative input mode.
     //
@@ -436,16 +489,46 @@ bool isUsingVulkanVideoBackend() noexcept {
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
-// Helper: tells if any of the render paths used by the new Vulkan renderer are currently in use.
-// Note: will return 'false' if we are using a Vulkan backend but just outputting the classic PSX renderer via Vulkan.
+// Tells if the OpenGL ES 3.0 video backend is being used
+//------------------------------------------------------------------------------------------------------------------------------------------
+bool isUsingGlesVideoBackend() noexcept {
+    #if PSYDOOM_GLES_RENDERER
+        return (gBackendType == BackendType::GLES);
+    #else
+        return false;
+    #endif
+}
+
+//------------------------------------------------------------------------------------------------------------------------------------------
+// Tells if a video backend which has the new renderer is being used: Vulkan, or its OpenGL ES 3.0 version
+//------------------------------------------------------------------------------------------------------------------------------------------
+bool isUsingNewRendererBackend() noexcept {
+    return (isUsingVulkanVideoBackend() || isUsingGlesVideoBackend());
+}
+
+//------------------------------------------------------------------------------------------------------------------------------------------
+// Helper: tells if any of the render paths used by the new Vulkan renderer (or its OpenGL ES 3.0 version) are currently in use.
+// Note: will return 'false' if we are using a Vulkan or GLES backend but just outputting the classic PSX renderer.
 //------------------------------------------------------------------------------------------------------------------------------------------
 bool isUsingVulkanRenderPath() noexcept {
+    // Note: dispatched to the GLES renderer for the GLES backend
     #if PSYDOOM_VULKAN_RENDERER
-        if (gBackendType == BackendType::Vulkan)
-            return (!VRenderer::isUsingPsxRenderPath());    // Anything other than the PSX render path is to do with the new Vulkan renderer
+        if (isUsingNewRendererBackend())
+            return (!VRenderer::isUsingPsxRenderPath());    // Anything other than the PSX render path is to do with the new renderer
     #endif
 
     return false;
+}
+
+//------------------------------------------------------------------------------------------------------------------------------------------
+// Called when SDL reports that the render device was reset (Android: the GL context was lost and SDL made a new one)
+//------------------------------------------------------------------------------------------------------------------------------------------
+void onRenderDeviceReset() noexcept {
+    #if PSYDOOM_GLES_RENDERER
+        if (gBackendType == BackendType::GLES) {
+            gVideoBackend_GLES.onContextLost();
+        }
+    #endif
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
@@ -455,6 +538,11 @@ IVideoBackend& getCurrentBackend() noexcept {
     #if PSYDOOM_VULKAN_RENDERER
         if (gBackendType == BackendType::Vulkan)
             return gVideoBackend_Vulkan;
+    #endif
+
+    #if PSYDOOM_GLES_RENDERER
+        if (gBackendType == BackendType::GLES)
+            return gVideoBackend_GLES;
     #endif
 
     return gVideoBackend_SDL;

@@ -13,6 +13,10 @@
 #include "Swapchain.h"
 #endif
 
+#if PSYDOOM_GLES_RENDERER
+#include "PsyDoom/Gles/GRenderer.h"
+#endif
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -266,6 +270,11 @@ static int SDLCALL AndroidLifeCycleEventFilter(void*, SDL_Event* event)
             SDL_SetRelativeMouseMode(SDL_FALSE);
             gbWindowFocusJustLost = true;
             VRenderer::destroyVulkanSwapChain();
+            #if PSYDOOM_GLES_RENDERER
+                if (Video::isUsingGlesVideoBackend()) {
+                    GRenderer::onAppEnterBackground();     // No window surface to draw to until back in the foreground
+                }
+            #endif
             break;
         case SDL_APP_DIDENTERFOREGROUND:
             SDL_ShowCursor(SDL_DISABLE);
@@ -276,6 +285,11 @@ static int SDLCALL AndroidLifeCycleEventFilter(void*, SDL_Event* event)
             // This prevents clicking on the window with a mouse for example triggering firing.
             gbIgnoreCurrentAttack = true;
             VRenderer::recreateVulkanSwapChain();
+            #if PSYDOOM_GLES_RENDERER
+                if (Video::isUsingGlesVideoBackend()) {
+                    GRenderer::onAppEnterForeground();
+                }
+            #endif
             break;
 
     }
@@ -329,6 +343,12 @@ static void handleSdlEvents() noexcept {
                 // This makes resizing and such easier in windowed mode.
                 bConsumeEvents = true;
                 break;
+            case SDL_RENDER_DEVICE_RESET: {
+                // The GLES renderer has to make all of its GL objects again if the GL context was lost (SDL made a new one).
+                // The GLES renderer follows window size changes by itself.
+                Video::onRenderDeviceReset();
+            }   break;
+
             case SDL_WINDOWEVENT: {
                 switch (sdlEvent.window.event) {
                     case SDL_WINDOWEVENT_RESIZED:

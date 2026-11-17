@@ -27,7 +27,8 @@ static constexpr int32_t ORIG_DISP_RES_Y = 240;
 // Which video backend is being used
 enum BackendType {
     SDL,        // Using an SDL backend which only supports the classic renderer
-    Vulkan      // Using a Vulkan backend which supports both the classic renderer and the new Vulkan renderer
+    Vulkan,     // Using a Vulkan backend which supports both the classic renderer and the new Vulkan renderer
+    GLES        // Using an OpenGL ES 3.0 backend which supports both the classic renderer and the new renderer (its GLES version)
 };
 
 extern BackendType  gBackendType;
@@ -50,7 +51,10 @@ void getClassicFramebufferWindowRect(
 
 void displayFramebuffer() noexcept;
 bool isUsingVulkanVideoBackend() noexcept;
+bool isUsingGlesVideoBackend() noexcept;
+bool isUsingNewRendererBackend() noexcept;
 bool isUsingVulkanRenderPath() noexcept;
+void onRenderDeviceReset() noexcept;
 IVideoBackend& getCurrentBackend() noexcept;
 
 END_NAMESPACE(Video)

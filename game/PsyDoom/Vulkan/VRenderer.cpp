@@ -34,6 +34,10 @@
 #include "VulkanInstance.h"
 #include "WindowSurface.h"
 
+#if PSYDOOM_GLES_RENDERER
+    #include "PsyDoom/Gles/GRenderer.h"
+#endif
+
 #include <regex>
 #include <SDL_log.h>
 #include <SDL_vulkan.h>
@@ -308,17 +312,13 @@ static void decidePresentSurfaceFormat() noexcept {
 
 //------------------------------------------------------------------------------------------------------------------------------------------
 // Update the resolution to render at and also helper values which aid converting between coordinate systems.
-// Updates everything based on the current present surface size.
+// Updates everything based on the given present surface size ('0x0' if there is none).
+// Also used by the GLES renderer, which has the same coordinate systems.
 //------------------------------------------------------------------------------------------------------------------------------------------
-static void updateCoordSysInfo() noexcept {
+void updateCoordSysInfo(const uint32_t presentSurfaceW, const uint32_t presentSurfaceH) noexcept {
     // Save the size of the present surface
-    if (gSwapchain.isValid()) {
-        gPresentSurfaceW = gSwapchain.getSwapExtentWidth();
-        gPresentSurfaceH = gSwapchain.getSwapExtentHeight();
-    } else {
-        gPresentSurfaceW = 0;
-        gPresentSurfaceH = 0;
-    }
+    gPresentSurfaceW = presentSurfaceW;
+    gPresentSurfaceH = presentSurfaceH;
 
     // Save the size of the framebuffer
     const bool bHaveValidPresentSurface = ((gPresentSurfaceW > 0) && (gPresentSurfaceH > 0));
@@ -422,6 +422,17 @@ static void updateCoordSysInfo() noexcept {
     } else {
         gInvFramebufferW = 0.0f;
         gInvFramebufferH = 0.0f;
+    }
+}
+
+//------------------------------------------------------------------------------------------------------------------------------------------
+// Updates the coordinate system info based on the current swapchain size
+//------------------------------------------------------------------------------------------------------------------------------------------
+static void updateCoordSysInfo() noexcept {
+    if (gSwapchain.isValid()) {
+        updateCoordSysInfo(gSwapchain.getSwapExtentWidth(), gSwapchain.getSwapExtentHeight());
+    } else {
+        updateCoordSysInfo(0, 0);
     }
 }
 
@@ -960,6 +971,11 @@ bool beginFrame() noexcept {
 // IMPORTANT: if this function returns 'false' then NO draw commands should be issued!
 //------------------------------------------------------------------------------------------------------------------------------------------
 bool isRendering() noexcept {
+    #if PSYDOOM_GLES_RENDERER
+        if (Video::gBackendType == Video::BackendType::GLES)
+            return GRenderer::isRendering();
+    #endif
+
     return gCmdBufferRec.isRecording();
 }
 
@@ -1055,6 +1071,13 @@ void endFrame() noexcept {
 // This makes updates to PSX VRAM visible to the new native Vulkan renderer.
 //------------------------------------------------------------------------------------------------------------------------------------------
 void pushPsxVramUpdates(const uint16_t rectLx, const uint16_t rectRx, const uint16_t rectTy, const uint16_t rectBy) noexcept {
+    #if PSYDOOM_GLES_RENDERER
+        if (Video::gBackendType == Video::BackendType::GLES) {
+            GRenderer::pushPsxVramUpdates(rectLx, rectRx, rectTy, rectBy);
+            return;
+        }
+    #endif
+
     // Sanity check the rectangle bounds.
     // Note that the rect IS allowed to wraparound to the other side of VRAM, but the coordinates must remain within range.
     // Wraparound is allowed because PSX VRAM writes wrap and LIBGPU supports that.
@@ -1142,7 +1165,24 @@ void setNextRenderPath(IVRendererPath& renderPath) noexcept {
 // Helper: tells if the classic PSX render path is the current render path being used
 //------------------------------------------------------------------------------------------------------------------------------------------
 bool isUsingPsxRenderPath() noexcept {
+    #if PSYDOOM_GLES_RENDERER
+        if (Video::gBackendType == Video::BackendType::GLES)
+            return GRenderer::isUsingPsxRenderPath();
+    #endif
+
     return (gpCurRenderPath == &gRenderPath_Psx);
+}
+
+//------------------------------------------------------------------------------------------------------------------------------------------
+// Helper: tells if the classic PSX render path will be used in the next frame
+//------------------------------------------------------------------------------------------------------------------------------------------
+bool isNextRenderPathPsx() noexcept {
+    #if PSYDOOM_GLES_RENDERER
+        if (Video::gBackendType == Video::BackendType::GLES)
+            return GRenderer::isNextRenderPathPsx();
+    #endif
+
+    return (gpNextRenderPath == &gRenderPath_Psx);
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------
@@ -1150,10 +1190,24 @@ bool isUsingPsxRenderPath() noexcept {
 // The switch happens at the beginning of the next frame.
 //------------------------------------------------------------------------------------------------------------------------------------------
 void switchToPsxRenderPath() noexcept {
+    #if PSYDOOM_GLES_RENDERER
+        if (Video::gBackendType == Video::BackendType::GLES) {
+            GRenderer::switchToPsxRenderPath();
+            return;
+        }
+    #endif
+
     setNextRenderPath(gRenderPath_Psx);
 }
 
 void switchToMainVulkanRenderPath() noexcept {
+    #if PSYDOOM_GLES_RENDERER
+        if (Video::gBackendType == Video::BackendType::GLES) {
+            GRenderer::switchToMainRenderPath();
+            return;
+        }
+    #endif
+
     setNextRenderPath(gRenderPath_Main);
 }
 
@@ -1176,6 +1230,13 @@ bool isSwapchainOutOfDate() noexcept {
 // Should be called whenever the gamma setting is changed, or when the renderer is created.
 //------------------------------------------------------------------------------------------------------------------------------------------
 void rebuildGammaAdjustTex() noexcept {
+    #if PSYDOOM_GLES_RENDERER
+        if (Video::gBackendType == Video::BackendType::GLES) {
+            GRenderer::rebuildGammaAdjustTex();
+            return;
+        }
+    #endif
+
     gGammaAdjustTex.destroy();
     
     if (!gGammaAdjustTex.initAs1dTexture(gDevice, VK_FORMAT_R8_UNORM, 256))
@@ -1198,6 +1259,18 @@ void rebuildGammaAdjustTex() noexcept {
 // Records commands to configure the viewport and scissors settings using the given command recorder.
 //------------------------------------------------------------------------------------------------------------------------------------------
 void setupViewportAndScissors(vgl::CmdBufferRecorder& cmdRec) noexcept {
+    int32_t viewportX = {}, viewportY = {}, viewportW = {}, viewportH = {};
+    getDrawViewport(viewportX, viewportY, viewportW, viewportH);
+
+    cmdRec.setViewport((float) viewportX, (float) viewportY, (float) viewportW, (float) viewportH, 0.0f, 1.0f);
+    cmdRec.setScissors(viewportX, viewportY, viewportW, viewportH);
+}
+
+//------------------------------------------------------------------------------------------------------------------------------------------
+// Gives the viewport (and scissors) area used for drawing in the framebuffer, in pixels from its top left corner.
+// Also used by the GLES renderer.
+//------------------------------------------------------------------------------------------------------------------------------------------
+void getDrawViewport(int32_t& x, int32_t& y, int32_t& w, int32_t& h) noexcept {
     // Note that while the view is allowed to extend horizontally if widescreen is enabled,
     // no extension is allowed vertically - instead, letterboxing will happen.
     //
@@ -1209,13 +1282,10 @@ void setupViewportAndScissors(vgl::CmdBufferRecorder& cmdRec) noexcept {
     const float viewportW = (bAllowWidescreen) ? (float) gFramebufferW : gPsxCoordsFbW;
     const float viewportH = gPsxCoordsFbH;
 
-    const int32_t viewportXInt = (int32_t)(viewportX);
-    const int32_t viewportYInt = (int32_t)(viewportY);
-    const int32_t viewportWInt = (int32_t)(viewportX + viewportW) - viewportXInt;
-    const int32_t viewportHInt = (int32_t)(viewportY + viewportH) - viewportYInt;
-
-    cmdRec.setViewport((float) viewportXInt, (float) viewportYInt, (float) viewportWInt, (float) viewportHInt, 0.0f, 1.0f);
-    cmdRec.setScissors(viewportXInt, viewportYInt, viewportWInt, viewportHInt);
+    x = (int32_t)(viewportX);
+    y = (int32_t)(viewportY);
+    w = (int32_t)(viewportX + viewportW) - x;
+    h = (int32_t)(viewportY + viewportH) - y;
 }
 
 END_NAMESPACE(VRenderer)

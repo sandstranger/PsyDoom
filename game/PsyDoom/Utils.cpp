@@ -256,7 +256,7 @@ void onBeginUIDrawing(const VPipelineType_Main drawPipeline) noexcept {
     #if PSYDOOM_VULKAN_RENDERER
         // Setup the UI transform matrix for drawing if using the Vulkan renderer
         const bool bSetDrawMatrix = (
-            (Video::gBackendType == Video::BackendType::Vulkan) &&
+            Video::isUsingNewRendererBackend() &&
             (!VRenderer::isUsingPsxRenderPath()) &&
             VRenderer::isRendering()
         );
@@ -289,8 +289,8 @@ void onBeginUIDrawing() noexcept {
 //------------------------------------------------------------------------------------------------------------------------------------------
 void checkForRendererToggleInput() noexcept {
     #if PSYDOOM_VULKAN_RENDERER
-        // Renderer can only be toggled if using the Vulkan backend
-        if (Video::gBackendType != Video::BackendType::Vulkan)
+        // Renderer can only be toggled if using the Vulkan backend (or its GLES version)
+        if (!Video::isUsingNewRendererBackend())
             return;
 
         // Do the toggle if the toggle button is just pressed
@@ -305,7 +305,8 @@ void checkForRendererToggleInput() noexcept {
             VRenderer::switchToPsxRenderPath();
         }
 
-        gStatusBar.message = (bUseVulkan) ? "Vulkan Renderer." : "Classic Renderer.";
+        const char* const newRendererMsg = (Video::isUsingGlesVideoBackend()) ? "GLES Renderer." : "Vulkan Renderer.";
+        gStatusBar.message = (bUseVulkan) ? newRendererMsg : "Classic Renderer.";
         gStatusBar.messageTicsLeft = 30;
     #endif
 }

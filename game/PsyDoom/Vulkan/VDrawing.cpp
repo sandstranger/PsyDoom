@@ -26,26 +26,11 @@
 #include "VTypes.h"
 #include "VVertexBufferSet.h"
 
+#include <algorithm>
+#include <cstring>
+#include <memory>
+
 BEGIN_NAMESPACE(VDrawing)
-
-//------------------------------------------------------------------------------------------------------------------------------------------
-// Enum representing a type of draw command. We store submitted draw commands in a list and record the Vulkan command buffer at the end
-// of the frame, once the vertex buffers are finalized and have known sizes.
-//------------------------------------------------------------------------------------------------------------------------------------------
-enum class DrawCmdType : uint32_t {
-    SetPipeline,        // Set the graphics pipeline to use: 1st arg is pipeline type, 2nd arg unused
-    SetUniforms,        // Set the uniforms to use: 1st arg is index in the uniforms list
-    Draw                // A command to draw primitives: 1st arg is vertex count, 2nd arg is vertex offset
-};
-
-//------------------------------------------------------------------------------------------------------------------------------------------
-// Stores a single drawing command: the meaning of the arguments depends on the command type
-//------------------------------------------------------------------------------------------------------------------------------------------
-struct DrawCmd {
-    DrawCmdType     type;
-    uint32_t        arg1;
-    uint32_t        arg2;
-};
 
 // Ringbuffer index for the current frame being generated
 static uint32_t gCurRingbufferIdx;
@@ -66,6 +51,84 @@ static std::vector<VShaderUniforms_Draw> gFrameUniforms;
 
 // Drawing commands for the current frame
 static std::vector<DrawCmd> gFrameDrawCmds;
+
+#if PSYDOOM_GLES_RENDERER
+    //--------------------------------------------------------------------------------------------------------------------------------------
+    // GLES renderer: vertices for the 'draw' subpass go into CPU memory (uploaded once at the end of the frame).
+    // Has the same batch tracking as 'VVertexBufferSet'.
+    //--------------------------------------------------------------------------------------------------------------------------------------
+    struct CpuVertexBuffer {
+        std::unique_ptr<VVertex_Draw[]>     pVerts;
+        uint32_t                            capacity;
+        uint32_t                            curOffset;
+        uint32_t                            curBatchStart;
+        uint32_t                            curBatchSize;
+        bool                                bInFrame;
+
+        void init(const uint32_t initialCapacity) noexcept {
+            pVerts = std::make_unique<VVertex_Draw[]>(initialCapacity);
+            capacity = initialCapacity;
+            curOffset = 0;
+            curBatchStart = 0;
+            curBatchSize = 0;
+            bInFrame = false;
+        }
+
+        void destroy() noexcept {
+            pVerts.reset();
+            capacity = 0;
+            curOffset = 0;
+            curBatchStart = 0;
+            curBatchSize = 0;
+            bInFrame = false;
+        }
+
+        VVertex_Draw* allocVerts(const uint32_t numVerts) noexcept {
+            if (!bInFrame)
+                FatalErrors::raise("VDrawing: attempting to draw outside of a GLES renderer frame!");
+
+            if (curOffset + numVerts > capacity) {
+                uint32_t newCapacity = std::max(capacity, 1024u);
+
+                while (curOffset + numVerts > newCapacity) {
+                    newCapacity *= 2;
+                }
+
+                std::unique_ptr<VVertex_Draw[]> pNewVerts = std::make_unique<VVertex_Draw[]>(newCapacity);
+                std::memcpy(pNewVerts.get(), pVerts.get(), (size_t) curOffset * sizeof(VVertex_Draw));
+                pVerts = std::move(pNewVerts);
+                capacity = newCapacity;
+            }
+
+            VVertex_Draw* const pAllocVerts = pVerts.get() + curOffset;
+            curOffset += numVerts;
+            curBatchSize += numVerts;
+            return pAllocVerts;
+        }
+
+        void endCurrentDrawBatch() noexcept {
+            if (curBatchSize > 0) {
+                curBatchStart = curOffset;
+                curBatchSize = 0;
+            }
+        }
+    };
+
+    static bool             gbUseCpuVertexBuffer;   // True when the GLES renderer uses this module
+    static CpuVertexBuffer  gCpuVertexBuffer;
+#endif
+
+//------------------------------------------------------------------------------------------------------------------------------------------
+// Allocates vertices for the 'draw' subpass in the current draw batch: in the Vulkan vertex buffer, or in CPU memory for GLES
+//------------------------------------------------------------------------------------------------------------------------------------------
+static inline VVertex_Draw* allocDrawVerts(const uint32_t numVerts) noexcept {
+    #if PSYDOOM_GLES_RENDERER
+        if (gbUseCpuVertexBuffer)
+            return gCpuVertexBuffer.allocVerts(numVerts);
+    #endif
+
+    return gVertexBuffers_Draw.allocVerts<VVertex_Draw>(numVerts);
+}
 
 //------------------------------------------------------------------------------------------------------------------------------------------
 // Tells if the specified 'Main' pipeline type uses a descriptor set or not.
@@ -183,6 +246,15 @@ void shutdown() noexcept {
     gFrameDrawCmds.clear();
     gFrameUniforms.clear();
     gCurDrawPipelineType = {};
+
+    #if PSYDOOM_GLES_RENDERER
+        if (gbUseCpuVertexBuffer) {
+            gCpuVertexBuffer.destroy();
+            gbUseCpuVertexBuffer = false;
+            return;
+        }
+    #endif
+
     gVertexBuffers_Draw.destroy();
 
     if (gpDescriptorSet) {
@@ -322,17 +394,83 @@ Matrix4f computeTransformMatrixFor3D(const float viewX, const float viewY, const
 // The primitives are drawn with whatever pipeline is currently bound.
 //------------------------------------------------------------------------------------------------------------------------------------------
 void endCurrentDrawBatch() noexcept {
-    // Ignore if there are no vertices in the current batch
-    if (gVertexBuffers_Draw.curBatchSize <= 0)
-        return;
+    // Records the draw command for the current batch of the given vertex storage, if there are vertices in it
+    const auto endBatch = [](auto& vertexStorage) noexcept {
+        if (vertexStorage.curBatchSize <= 0)
+            return;
 
-    // Record the draw command
-    DrawCmd& drawCmd = gFrameDrawCmds.emplace_back();
-    drawCmd.type = DrawCmdType::Draw;
-    drawCmd.arg1 = gVertexBuffers_Draw.curBatchSize;
-    drawCmd.arg2 = gVertexBuffers_Draw.curBatchStart;
-    gVertexBuffers_Draw.endCurrentDrawBatch();
+        DrawCmd& drawCmd = gFrameDrawCmds.emplace_back();
+        drawCmd.type = DrawCmdType::Draw;
+        drawCmd.arg1 = vertexStorage.curBatchSize;
+        drawCmd.arg2 = vertexStorage.curBatchStart;
+        vertexStorage.endCurrentDrawBatch();
+    };
+
+    #if PSYDOOM_GLES_RENDERER
+        if (gbUseCpuVertexBuffer) {
+            endBatch(gCpuVertexBuffer);
+            return;
+        }
+    #endif
+
+    endBatch(gVertexBuffers_Draw);
 }
+
+#if PSYDOOM_GLES_RENDERER
+//------------------------------------------------------------------------------------------------------------------------------------------
+// GLES renderer: initializes the drawing module to generate vertices into CPU memory, instead of using Vulkan
+//------------------------------------------------------------------------------------------------------------------------------------------
+void initForGles() noexcept {
+    gbUseCpuVertexBuffer = true;
+    gCpuVertexBuffer.init((4 * 1024 * 1024) / sizeof(VVertex_Draw));
+    gCurDrawPipelineType = (VPipelineType_Main) -1;
+    gFrameUniforms.reserve(16);
+    gFrameDrawCmds.reserve(4196);
+}
+
+//------------------------------------------------------------------------------------------------------------------------------------------
+// GLES renderer: start of frame logic for the drawing module (main render path)
+//------------------------------------------------------------------------------------------------------------------------------------------
+void beginFrameGles() noexcept {
+    ASSERT(gbUseCpuVertexBuffer);
+    ASSERT(gCurDrawPipelineType == (VPipelineType_Main) -1);
+    gCpuVertexBuffer.curOffset = 0;
+    gCpuVertexBuffer.curBatchStart = 0;
+    gCpuVertexBuffer.curBatchSize = 0;
+    gCpuVertexBuffer.bInFrame = true;
+}
+
+//------------------------------------------------------------------------------------------------------------------------------------------
+// GLES renderer: ends the current batch and gives everything drawn in the frame. Valid until 'endFrameGles'.
+//------------------------------------------------------------------------------------------------------------------------------------------
+FrameDrawData getFrameDrawDataGles() noexcept {
+    ASSERT(gbUseCpuVertexBuffer);
+    endCurrentDrawBatch();
+
+    FrameDrawData data = {};
+    data.pCmds = gFrameDrawCmds.data();
+    data.numCmds = (uint32_t) gFrameDrawCmds.size();
+    data.pUniforms = gFrameUniforms.data();
+    data.numUniforms = (uint32_t) gFrameUniforms.size();
+    data.pVerts = gCpuVertexBuffer.pVerts.get();
+    data.numVerts = gCpuVertexBuffer.curOffset;
+    return data;
+}
+
+//------------------------------------------------------------------------------------------------------------------------------------------
+// GLES renderer: end of frame cleanup for the drawing module
+//------------------------------------------------------------------------------------------------------------------------------------------
+void endFrameGles() noexcept {
+    ASSERT(gbUseCpuVertexBuffer);
+    gFrameDrawCmds.clear();
+    gFrameUniforms.clear();
+    gCurDrawPipelineType = (VPipelineType_Main) -1;
+    gCpuVertexBuffer.curOffset = 0;
+    gCpuVertexBuffer.curBatchStart = 0;
+    gCpuVertexBuffer.curBatchSize = 0;
+    gCpuVertexBuffer.bInFrame = false;
+}
+#endif  // #if PSYDOOM_GLES_RENDERER
 
 //------------------------------------------------------------------------------------------------------------------------------------------
 // Add a 2D/UI line to the 'draw' subpass
@@ -347,7 +485,7 @@ void addUILine(
     const uint8_t b
 ) noexcept {
     // Fill in the vertices, starting first with common parameters
-    VVertex_Draw* const pVerts = gVertexBuffers_Draw.allocVerts<VVertex_Draw>(2);
+    VVertex_Draw* const pVerts = allocDrawVerts(2);
 
     for (uint32_t i = 0; i < 2; ++i) {
         VVertex_Draw& vert = pVerts[i];
@@ -383,7 +521,7 @@ void addFlatColoredTriangle(
     const uint8_t g,
     const uint8_t b
 ) noexcept {
-    VVertex_Draw* const pVerts = gVertexBuffers_Draw.allocVerts<VVertex_Draw>(3);
+    VVertex_Draw* const pVerts = allocDrawVerts(3);
 
     for (uint32_t i = 0; i < 3; ++i) {
         VVertex_Draw& vert = pVerts[i];
@@ -422,7 +560,7 @@ void addFlatColoredQuad(
     const uint8_t g,
     const uint8_t b
 ) noexcept {
-    VVertex_Draw* const pVerts = gVertexBuffers_Draw.allocVerts<VVertex_Draw>(6);
+    VVertex_Draw* const pVerts = allocDrawVerts(6);
 
     for (uint32_t i = 0; i < 6; ++i) {
         VVertex_Draw& vert = pVerts[i];
@@ -466,7 +604,7 @@ void addUISprite(
     const uint16_t texWinH
 ) noexcept {
     // Fill in the vertices, starting first with common parameters
-    VVertex_Draw* const pVerts = gVertexBuffers_Draw.allocVerts<VVertex_Draw>(6);
+    VVertex_Draw* const pVerts = allocDrawVerts(6);
 
     for (uint32_t i = 0; i < 6; ++i) {
         VVertex_Draw& vert = pVerts[i];
@@ -553,7 +691,7 @@ void addWorldTriangle(
     const uint8_t stMulA
 ) noexcept {
     // Fill in the vertices, starting first with common parameters
-    VVertex_Draw* const pVerts = gVertexBuffers_Draw.allocVerts<VVertex_Draw>(3);
+    VVertex_Draw* const pVerts = allocDrawVerts(3);
 
     for (uint32_t i = 0; i < 3; ++i) {
         VVertex_Draw& vert = pVerts[i];
@@ -609,7 +747,7 @@ void addWorldQuad(
     const uint8_t stMulA
 ) noexcept {
     // Fill in the vertices, starting first with the parameters that are the same for all vertices
-    VVertex_Draw* const pVerts = gVertexBuffers_Draw.allocVerts<VVertex_Draw>(6);
+    VVertex_Draw* const pVerts = allocDrawVerts(6);
 
     for (uint32_t i = 0; i < 6; ++i) {
         VVertex_Draw& vert = pVerts[i];
@@ -668,7 +806,7 @@ void addWorldInfiniteSkyWall(
 ) noexcept {
     // Fill in the vertices, starting first with common parameters.
     // Note: we store the sky U offset based on player rotation in the U coordinate.
-    VVertex_Draw* const pVerts = gVertexBuffers_Draw.allocVerts<VVertex_Draw>(6);
+    VVertex_Draw* const pVerts = allocDrawVerts(6);
 
     for (uint32_t i = 0; i < 6; ++i) {
         VVertex_Draw& vert = pVerts[i];
@@ -746,7 +884,7 @@ void addWorldSkyQuad(
 ) noexcept {
     // Fill in the vertices, starting first with common parameters.
     // Note: we store the sky U offset based on player rotation in the U coordinate.
-    VVertex_Draw* const pVerts = gVertexBuffers_Draw.allocVerts<VVertex_Draw>(6);
+    VVertex_Draw* const pVerts = allocDrawVerts(6);
 
     for (uint32_t i = 0; i < 6; ++i) {
         VVertex_Draw& vert = pVerts[i];

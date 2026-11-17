@@ -19,6 +19,9 @@ class IVideoBackend {
 public:
     virtual ~IVideoBackend() noexcept {}
 
+    // Called just before the SDL window is created: for backend specific setup, such as the OpenGL attributes of the window.
+    virtual void prepareForWindowCreate() noexcept {}
+
     // Get flags that should be added for SDL window creation specifically for this backend.
     // E.G: 'SDL_WINDOW_VULKAN' for a Vulkan based backend.
     virtual uint32_t getSdlWindowCreateFlags() noexcept = 0;

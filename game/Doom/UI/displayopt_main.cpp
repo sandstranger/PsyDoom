@@ -164,8 +164,8 @@ gameaction_t DisplayOpt_Update() noexcept {
                     Video::gGammaTbl.build((float) PlayerPrefs::gGamma1000 / 1000.0f);
                     
                     #if PSYDOOM_VULKAN_RENDERER
-                        if (Video::isUsingVulkanVideoBackend()) {
-                            VRenderer::rebuildGammaAdjustTex();
+                        if (Video::isUsingNewRendererBackend()) {
+                            VRenderer::rebuildGammaAdjustTex();     // Note: dispatched to the GLES renderer for the GLES backend
                         }
                     #endif
                 };
@@ -229,7 +229,7 @@ gameaction_t DisplayOpt_Update() noexcept {
     #if PSYDOOM_VULKAN_RENDERER
         // Renderer toggle
         case menu_renderer: {
-            const bool bCanSwitchRenderers = (Video::gBackendType == Video::BackendType::Vulkan);
+            const bool bCanSwitchRenderers = Video::isUsingNewRendererBackend();
 
             if (bCanSwitchRenderers) {
                 if (bMenuLeft && (!Video::isUsingVulkanRenderPath())) {
@@ -374,7 +374,8 @@ void DisplayOpt_Draw() noexcept {
         #if PSYDOOM_VULKAN_RENDERER
             // Draw the renderer option
             const bool bIsUsingVulkan = Video::isUsingVulkanRenderPath();
-            I_DrawString(62, 134, (bIsUsingVulkan) ? "Vulkan Renderer" : "Classic Renderer");
+            const char* const newRendererName = (Video::isUsingGlesVideoBackend()) ? "GLES Renderer" : "Vulkan Renderer";
+            I_DrawString(62, 134, (bIsUsingVulkan) ? newRendererName : "Classic Renderer");
 
             if (gCursorPos[gCurPlayerIndex] == menu_renderer) {
                 cursorY = 134;

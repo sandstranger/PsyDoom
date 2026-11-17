@@ -4,6 +4,7 @@
 #include "i_main.h"
 #include "i_texcache.h"
 #include "PsyDoom/Config/Config.h"
+#include "PsyDoom/Gles/GCrossfader.h"
 #include "PsyDoom/Input.h"
 #include "PsyDoom/Utils.h"
 #include "PsyDoom/Video.h"
@@ -25,13 +26,21 @@ void I_PreCrossfade() noexcept {
         return;
 
     #if PSYDOOM_VULKAN_RENDERER
-        if (Video::gBackendType == Video::BackendType::Vulkan) {
+        if (Video::isUsingNewRendererBackend()) {
             // If we are on the PSX render path ensure we will stay on it, render path switching is not allowed during crossfade.
             // Otherwise allow the crossfader module to do it's setup and schedule a render path switch.
+            // Note: the render path functions of 'VRenderer' are dispatched to the GLES renderer for the GLES backend.
             if (VRenderer::isUsingPsxRenderPath()) {
-                VRenderer::setNextRenderPath(VRenderer::gRenderPath_Psx);
+                VRenderer::switchToPsxRenderPath();
             } else {
-                VCrossfader::doPreCrossfadeSetup();
+                #if PSYDOOM_GLES_RENDERER
+                    if (Video::isUsingGlesVideoBackend()) {
+                        GCrossfader::doPreCrossfadeSetup();
+                    } else
+                #endif
+                {
+                    VCrossfader::doPreCrossfadeSetup();
+                }
             }
         }
     #endif
@@ -55,6 +64,14 @@ void I_CrossfadeFrameBuffers() noexcept {
     #if PSYDOOM_VULKAN_RENDERER
         if (Video::isUsingVulkanRenderPath()) {
             constexpr uint32_t NUM_VBLANKS = 52;
+
+            #if PSYDOOM_GLES_RENDERER
+                if (Video::isUsingGlesVideoBackend()) {
+                    GCrossfader::doCrossfade(NUM_VBLANKS);
+                    return;
+                }
+            #endif
+
             VCrossfader::doCrossfade(NUM_VBLANKS);
             return;
         }

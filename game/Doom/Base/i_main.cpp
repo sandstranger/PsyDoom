@@ -24,6 +24,7 @@
 #include "PsyDoom/PsxVm.h"
 #include "PsyDoom/Utils.h"
 #include "PsyDoom/Video.h"
+#include "PsyDoom/Gles/GPlaqueDrawer.h"
 #include "PsyDoom/Vulkan/VDrawing.h"
 #include "PsyDoom/Vulkan/VPlaqueDrawer.h"
 #include "PsyDoom/Vulkan/VRenderer.h"
@@ -565,6 +566,13 @@ void I_DrawLoadingPlaque(texture_t& tex, const int16_t xpos, const int16_t ypos,
     #if PSYDOOM_MODS && PSYDOOM_VULKAN_RENDERER
         // PsyDoom: If we are using the Vulkan render path then delegate to that instead
         if (Video::isUsingVulkanRenderPath()) {
+            #if PSYDOOM_GLES_RENDERER
+                if (Video::isUsingGlesVideoBackend()) {
+                    GPlaqueDrawer::drawPlaque(tex, xpos, ypos, clutId);
+                    return;
+                }
+            #endif
+
             VPlaqueDrawer::drawPlaque(tex, xpos, ypos, clutId);
             return;
         }

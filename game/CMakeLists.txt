@@ -474,6 +474,26 @@ if (PSYDOOM_INCLUDE_VULKAN_RENDERER)
     )
 endif()
 
+if (PSYDOOM_INCLUDE_GLES_RENDERER)
+    list(APPEND SOURCE_FILES
+        "PsyDoom/Gles/GCrossfader.cpp"
+        "PsyDoom/Gles/GCrossfader.h"
+        "PsyDoom/Gles/GlesApi.h"
+        "PsyDoom/Gles/GPlaqueDrawer.cpp"
+        "PsyDoom/Gles/GPlaqueDrawer.h"
+        "PsyDoom/Gles/GRenderer.cpp"
+        "PsyDoom/Gles/GRenderer.h"
+        "PsyDoom/Gles/GShaderCache.cpp"
+        "PsyDoom/Gles/GShaderCache.h"
+        "PsyDoom/Gles/GShaders.cpp"
+        "PsyDoom/Gles/GShaders.h"
+        "PsyDoom/VideoBackend_GLES.cpp"
+        "PsyDoom/VideoBackend_GLES.h"
+        "PsyDoom/VideoSurface_GLES.cpp"
+        "PsyDoom/VideoSurface_GLES.h"
+    )
+endif()
+
 if (PSYDOOM_INCLUDE_OLD_CODE)
     list(APPEND SOURCE_FILES
         "Old/Doom/Base/Old_i_crossfade.cpp"
@@ -579,6 +599,7 @@ target_bool_compile_definition(${GAME_TGT_NAME} PRIVATE PSYDOOM_LIMIT_REMOVING  
 target_bool_compile_definition(${GAME_TGT_NAME} PRIVATE PSYDOOM_MISSING_TEX_WARNINGS    ${PSYDOOM_EMIT_MISSING_TEX_WARNINGS})
 target_bool_compile_definition(${GAME_TGT_NAME} PRIVATE PSYDOOM_USE_NEW_I_ERROR         ${PSYDOOM_USE_NEW_I_ERROR})
 target_bool_compile_definition(${GAME_TGT_NAME} PRIVATE PSYDOOM_VULKAN_RENDERER         ${PSYDOOM_INCLUDE_VULKAN_RENDERER})
+target_bool_compile_definition(${GAME_TGT_NAME} PRIVATE PSYDOOM_GLES_RENDERER           ${PSYDOOM_INCLUDE_GLES_RENDERER})
 
 # Specify include dirs
 include_directories(${INCLUDE_PATHS})
@@ -601,6 +622,10 @@ endif()
 
 if (PSYDOOM_INCLUDE_VULKAN_RENDERER)
     target_link_libraries(${GAME_TGT_NAME} PRIVATE ${VULKAN_GL_TGT_NAME})
+endif()
+
+if (PSYDOOM_INCLUDE_GLES_RENDERER)
+    target_link_libraries(${GAME_TGT_NAME} PRIVATE ${GLAD_TGT_NAME})
 endif()
 
 # MSVC specific stuff

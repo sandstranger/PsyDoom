@@ -22,6 +22,7 @@ namespace Gpu {
 
 enum class VPipelineType_Main : uint8_t;
 struct VShaderUniforms_Draw;
+struct VVertex_Draw;
 
 BEGIN_NAMESPACE(VDrawing)
 
@@ -31,6 +32,45 @@ struct AddWorldQuadVert {
     float       u, v;
     uint8_t     r, g, b;
 };
+
+//------------------------------------------------------------------------------------------------------------------------------------------
+// Enum representing a type of draw command. We store submitted draw commands in a list and record the Vulkan command buffer at the end
+// of the frame, once the vertex buffers are finalized and have known sizes. The GLES renderer replays the same list at the end of the frame.
+//------------------------------------------------------------------------------------------------------------------------------------------
+enum class DrawCmdType : uint32_t {
+    SetPipeline,        // Set the graphics pipeline to use: 1st arg is pipeline type, 2nd arg unused
+    SetUniforms,        // Set the uniforms to use: 1st arg is index in the uniforms list
+    Draw                // A command to draw primitives: 1st arg is vertex count, 2nd arg is vertex offset
+};
+
+//------------------------------------------------------------------------------------------------------------------------------------------
+// Stores a single drawing command: the meaning of the arguments depends on the command type
+//------------------------------------------------------------------------------------------------------------------------------------------
+struct DrawCmd {
+    DrawCmdType     type;
+    uint32_t        arg1;
+    uint32_t        arg2;
+};
+
+#if PSYDOOM_GLES_RENDERER
+    //--------------------------------------------------------------------------------------------------------------------------------------
+    // GLES renderer: everything drawn in the frame, for it to upload and replay at the end of the frame.
+    // With the GLES renderer vertices are generated into CPU memory and uploaded once per frame (no buffers mapped while drawing).
+    //--------------------------------------------------------------------------------------------------------------------------------------
+    struct FrameDrawData {
+        const DrawCmd*                  pCmds;
+        uint32_t                        numCmds;
+        const VShaderUniforms_Draw*     pUniforms;
+        uint32_t                        numUniforms;
+        const VVertex_Draw*             pVerts;
+        uint32_t                        numVerts;
+    };
+
+    void initForGles() noexcept;
+    void beginFrameGles() noexcept;
+    FrameDrawData getFrameDrawDataGles() noexcept;
+    void endFrameGles() noexcept;
+#endif
 
 void init(vgl::LogicalDevice& device, vgl::BaseTexture& vramTex) noexcept;
 void shutdown() noexcept;
